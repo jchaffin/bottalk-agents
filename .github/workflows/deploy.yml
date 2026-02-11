@@ -32,10 +32,10 @@ jobs:
         run: pip install pipecatcloud
 
       - name: Authenticate with Pipecat Cloud
-        run: pipecat cloud auth set-api-key "${{ secrets.PIPECAT_CLOUD_API_KEY }}"
+        run: python -m pipecatcloud cloud auth set-api-key "${{ secrets.PIPECAT_CLOUD_API_KEY }}"
 
       - name: Build and push image
-        run: pipecat cloud docker build-push
+        run: python -m pipecatcloud cloud docker build-push
 
       - name: Deploy
-        run: pipecat cloud deploy
+        run: python -m pipecatcloud cloud deploy
