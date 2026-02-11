@@ -1,0 +1,8 @@
+agent_name = "outrival-agent"
+image = "your-docker-repository/outrival-agent:latest"
+secret_set = "outrival-secrets"
+agent_profile = "agent-1x"
+region = "us-west"
+
+[scaling]
+min_agents = 0
