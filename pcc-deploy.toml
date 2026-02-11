@@ -1,6 +1,5 @@
 agent_name = "outrival-agent"
 image = "ghcr.io/jchaffin/outrival-agents:latest"
-image_credentials = "ghcr-credentials"
 secret_set = "outrival-secrets"
 agent_profile = "agent-1x"
 region = "us-west"

@@ -49,7 +49,6 @@ jobs:
             "image": "'"$IMAGE"'",
             "region": "us-west",
             "nodeType": "arm",
-              "imagePullSecretSet": "ghcr-credentials",
               "secretSet": "outrival-secrets",
             "agentProfile": "agent-1x",
             "autoScaling": { "minAgents": 0, "maxAgents": 10 }
