@@ -45,24 +45,34 @@ jobs:
           AUTH: "Authorization: Bearer ${{ secrets.PCC_PRIVATE_KEY }}"
         run: |
           BODY='{
-            "serviceName": "'"$AGENT_NAME"'",
             "image": "'"$IMAGE"'",
-            "region": "us-west",
             "nodeType": "arm",
-              "imagePullSecretSet": "ghcr-credentials",
-              "secretSet": "outrival-secrets",
+            "imagePullSecretSet": "ghcr-credentials",
+            "secretSet": "outrival-secrets",
             "agentProfile": "agent-1x",
             "autoScaling": { "minAgents": 0, "maxAgents": 10 }
           }'
 
-          # Try create; if agent already exists (409), update instead.
+          # Try update first (agent already exists).
           CODE=$(curl -s -o /tmp/pcc.json -w "%{http_code}" \
-            -X POST "$PCC_API/agents" -H "$AUTH" -H "Content-Type: application/json" -d "$BODY")
+            -X POST "$PCC_API/agents/$AGENT_NAME" \
+            -H "$AUTH" -H "Content-Type: application/json" -d "$BODY")
 
-          if [ "$CODE" = "409" ]; then
+          # If agent doesn't exist (404), create it.
+          if [ "$CODE" = "404" ]; then
+            CREATE_BODY='{
+              "serviceName": "'"$AGENT_NAME"'",
+              "image": "'"$IMAGE"'",
+              "region": "us-west",
+              "nodeType": "arm",
+              "imagePullSecretSet": "ghcr-credentials",
+              "secretSet": "outrival-secrets",
+              "agentProfile": "agent-1x",
+              "autoScaling": { "minAgents": 0, "maxAgents": 10 }
+            }'
             CODE=$(curl -s -o /tmp/pcc.json -w "%{http_code}" \
-              -X POST "$PCC_API/agents/$AGENT_NAME" -H "$AUTH" -H "Content-Type: application/json" \
-              -d '{"image": "'"$IMAGE"'"}')
+              -X POST "$PCC_API/agents" \
+              -H "$AUTH" -H "Content-Type: application/json" -d "$CREATE_BODY")
           fi
 
           cat /tmp/pcc.json && echo ""
