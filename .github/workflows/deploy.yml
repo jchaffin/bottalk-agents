@@ -4,11 +4,6 @@ on:
   push:
     branches: [master]
 
-env:
-  AGENT_NAME: outrival-agent
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/outrival-agent
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -19,35 +14,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up QEMU (for arm64 builds)
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          platforms: linux/arm64
-          tags: |
-            ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ghcr.io/${{ env.IMAGE_NAME }}:latest
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Install Pipecat CLI
         run: pip install pipecatcloud
 
-      - name: Deploy to Pipecat Cloud
-        env:
-          PIPECAT_API_KEY: ${{ secrets.PIPECAT_CLOUD_API_KEY }}
-        run: |
-          pipecat cloud auth set-api-key "$PIPECAT_API_KEY"
-          pipecat cloud deploy "$AGENT_NAME" \
-            "ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}" \
-            --secret-set outrival-secrets \
-            --profile agent-1x
+      - name: Authenticate with Pipecat Cloud
+        run: pipecat cloud auth set-api-key "${{ secrets.PIPECAT_CLOUD_API_KEY }}"
+
+      - name: Build and push image
+        run: pipecat cloud docker build-push
+
+      - name: Deploy
+        run: pipecat cloud deploy
