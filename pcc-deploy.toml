@@ -1,5 +1,5 @@
 agent_name = "outrival-agent"
-image = "ghcr.io/jchaffin/outrival-agent:latest"
+image = "ghcr.io/jchaffin/outrival-agents:latest"
 secret_set = "outrival-secrets"
 agent_profile = "agent-1x"
 region = "us-west"
