@@ -20,12 +20,12 @@ config comes via ``args.body``.
 """
 
 from loguru import logger
-from pipecat.runner.types import PipecatRunnerArguments
+from pipecat.runner.types import RunnerArguments
 
 from agent import run_agent
 
 
-async def bot(args: PipecatRunnerArguments):
+async def bot(args: RunnerArguments):
     body = args.body or {}
 
     room_url = body["room_url"]

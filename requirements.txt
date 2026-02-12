@@ -1,2 +1,6 @@
 pipecat-ai[daily,openai,elevenlabs,silero]
 loguru
+fastapi
+uvicorn[standard]
+aiohttp
+python-dotenv
