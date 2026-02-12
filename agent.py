@@ -113,7 +113,7 @@ class LLMTextRelay(FrameProcessor):
             self._buffer = ""
             await self.push_frame(
                 OutputTransportMessageUrgentFrame(
-                    message={"label": "rtvi-ai", "type": "bot-llm-started"}
+                    message={"label": "outrival", "type": "bot-llm-started"}
                 )
             )
         elif isinstance(frame, LLMTextFrame):
@@ -124,7 +124,7 @@ class LLMTextRelay(FrameProcessor):
             await self._flush_buffer()
             await self.push_frame(
                 OutputTransportMessageUrgentFrame(
-                    message={"label": "rtvi-ai", "type": "bot-llm-stopped"}
+                    message={"label": "outrival", "type": "bot-llm-stopped"}
                 )
             )
 
@@ -137,7 +137,7 @@ class LLMTextRelay(FrameProcessor):
             await self.push_frame(
                 OutputTransportMessageUrgentFrame(
                     message={
-                        "label": "rtvi-ai",
+                        "label": "outrival",
                         "type": "bot-llm-text",
                         "data": {"text": text},
                     }
