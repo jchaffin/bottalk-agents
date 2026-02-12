@@ -35,7 +35,8 @@ async def bot(args: RunnerArguments):
     voice_id = body["voice_id"]
     goes_first = body.get("goes_first", False)
 
-    logger.info(f"[{name}] starting session {args.session_id} in {room_url}")
+    session_id = getattr(args, "session_id", "local")
+    logger.info(f"[{name}] starting session {session_id} in {room_url}")
 
     await run_agent(
         room_url=room_url,
