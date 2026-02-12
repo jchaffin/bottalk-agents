@@ -4,9 +4,14 @@ Pipecat Cloud entry point.
 Receives session arguments from the platform and launches the
 appropriate voice agent (Sarah or Mike) into a shared Daily room.
 
-The calling service passes agent identity via ``args.body``:
+Since we create the Daily room ourselves (to put both agents in
+the same room), we do NOT use ``createDailyRoom`` in the start
+request.  PCC therefore sends ``PipecatRunnerArguments`` — all
+config comes via ``args.body``.
 
     {
+        "room_url": "https://...",
+        "token": "...",
         "name": "Sarah",
         "system_prompt": "...",
         "voice_id": "21m00Tcm4TlvDq8ikWAM",
@@ -15,17 +20,16 @@ The calling service passes agent identity via ``args.body``:
 """
 
 from loguru import logger
-from pipecat.runner.types import DailyRunnerArguments
+from pipecat.runner.types import PipecatRunnerArguments
 
 from agent import run_agent
 
 
-async def bot(args: DailyRunnerArguments):
+async def bot(args: PipecatRunnerArguments):
     body = args.body or {}
 
-    room_url = args.room_url or body.get("room_url")
-    token = args.token or body.get("token")
-
+    room_url = body["room_url"]
+    token = body["token"]
     name = body["name"]
     system_prompt = body["system_prompt"]
     voice_id = body["voice_id"]
