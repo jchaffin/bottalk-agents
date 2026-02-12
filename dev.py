@@ -109,19 +109,29 @@ async def start():
     here = os.path.dirname(__file__)
     logger.info(f"Room: {room_url}")
 
-    # Spawn exactly like the original main.py did.
-    sarah = subprocess.Popen(
-        [py, os.path.join(here, "sarah.py"),
-         "--room-url", room_url, "--token", t_sarah],
-    )
+    # Spawn as fully separate processes (not multiprocessing) so each
+    # gets its own Daily client with no shared state.
+    sarah = subprocess.Popen([
+        py, os.path.join(here, "run_agent.py"),
+        "--room-url", room_url,
+        "--token", t_sarah,
+        "--name", "Sarah",
+        "--system-prompt", SARAH_PROMPT,
+        "--voice-id", SARAH_VOICE,
+        "--goes-first",
+    ])
     _procs.append(sarah)
 
     await asyncio.sleep(3)
 
-    mike = subprocess.Popen(
-        [py, os.path.join(here, "mike.py"),
-         "--room-url", room_url, "--token", t_mike],
-    )
+    mike = subprocess.Popen([
+        py, os.path.join(here, "run_agent.py"),
+        "--room-url", room_url,
+        "--token", t_mike,
+        "--name", "Mike",
+        "--system-prompt", MIKE_PROMPT,
+        "--voice-id", MIKE_VOICE,
+    ])
     _procs.append(mike)
 
     logger.info(f"Sarah PID={sarah.pid}  Mike PID={mike.pid}")
