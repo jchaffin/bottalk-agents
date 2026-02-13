@@ -31,9 +31,10 @@ async def bot(args: RunnerArguments):
     voice_id = body["voice_id"]
     goes_first = body.get("goes_first", False)
     known_agents = set(body.get("known_agents", []))
+    max_turns = body.get("max_turns", 20)
 
     session_id = getattr(args, "session_id", "local")
-    logger.info(f"[{name}] starting session {session_id} in {room_url}")
+    logger.info(f"[{name}] starting session {session_id} in {room_url} (max_turns={max_turns})")
 
     # Let the first agent join and start transcription before the second
     # agent enters the room (mirrors the 3-second sleep in dev.py).
@@ -52,4 +53,5 @@ async def bot(args: RunnerArguments):
         voice_id=voice_id,
         goes_first=goes_first,
         known_agents=known_agents or None,
+        max_turns=max_turns,
     )

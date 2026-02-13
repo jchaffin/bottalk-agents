@@ -35,6 +35,12 @@ async def main():
         default="",
         help="Comma-separated list of all agent names in the room",
     )
+    p.add_argument(
+        "--max-turns",
+        type=int,
+        default=20,
+        help="Max LLM response turns before the agent shuts down (default: 20)",
+    )
     args = p.parse_args()
 
     known = (
@@ -53,6 +59,7 @@ async def main():
         voice_id=args.voice_id,
         goes_first=args.goes_first,
         known_agents=known,
+        max_turns=args.max_turns,
     )
 
 

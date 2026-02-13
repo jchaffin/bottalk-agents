@@ -48,6 +48,51 @@ from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
 
 
+class ConversationLimiter(FrameProcessor):
+    """Hard-stop the pipeline after a maximum number of LLM turns.
+
+    Placed after ``asst_agg`` (and the trimmer) in the pipeline so it
+    sees ``LLMFullResponseEndFrame`` once per completed assistant turn.
+    After *max_turns* responses the pipeline task is cancelled, which
+    tears down the Daily transport and ends the session.
+
+    This prevents runaway token usage when two agents are conversing
+    in a loop with no external stop signal.
+
+    The ``task`` reference is set after construction via ``set_task()``
+    because the task object requires the pipeline (which includes this
+    processor) to already exist.
+    """
+
+    def __init__(self, *, max_turns: int = 20):
+        super().__init__()
+        self._task: PipelineTask | None = None
+        self._max_turns = max_turns
+        self._turn_count = 0
+
+    def set_task(self, task: PipelineTask):
+        self._task = task
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, LLMFullResponseEndFrame):
+            self._turn_count += 1
+            logger.info(
+                f"[ConversationLimiter] turn {self._turn_count}/{self._max_turns}"
+            )
+            if self._turn_count >= self._max_turns:
+                logger.warning(
+                    f"[ConversationLimiter] reached {self._max_turns} turns — "
+                    "shutting down pipeline to prevent runaway API usage"
+                )
+                if self._task:
+                    await self._task.cancel()
+                return  # don't push the frame further
+
+        await self.push_frame(frame, direction)
+
+
 class ContextTrimmer(FrameProcessor):
     """Keep the LLM context bounded to a sliding window of recent turns.
 
@@ -251,6 +296,7 @@ async def run_agent(
     goes_first: bool = False,
     name_filter: bool = False,
     known_agents: set[str] | None = None,
+    max_turns: int = 20,
 ):
     """Join *room_url* as *name* and run an LLM voice pipeline.
 
@@ -315,10 +361,16 @@ async def run_agent(
     # visibly lags behind the TTS audio after ~10 turns.
     trimmer = ContextTrimmer(msgs, max_turns=10)
 
+    # -- Conversation limiter --
+    # Hard cap on the number of completed LLM turns.  After max_turns
+    # assistant responses the pipeline is cancelled, preventing the
+    # infinite bot↔bot loop from burning through the OpenAI quota.
+    limiter = ConversationLimiter(max_turns=max_turns)
+
     # -- Pipeline --
     # Frames flow left-to-right:
     #   audio in → user aggregator → LLM → relay → TTS → audio out
-    #   → assistant aggregator → context trimmer
+    #   → assistant aggregator → context trimmer → conversation limiter
     # LLMTextRelay intercepts LLM frames and pushes bot-llm-text messages
     # directly downstream, so they only traverse TTS → transport.output
     # (2 hops) instead of the full RTVI observer path (6+ hops).
@@ -331,6 +383,7 @@ async def run_agent(
         transport.output(),
         asst_agg,
         trimmer,
+        limiter,
     ])
 
     task = PipelineTask(pipeline, params=PipelineParams(
@@ -355,6 +408,9 @@ async def run_agent(
             metrics_enabled=False,
         ),
     )
+
+    # Wire up the conversation limiter now that `task` exists.
+    limiter.set_task(task)
 
     # -- Transcription filter --
     # Intercept raw transcription messages at the transport level to drop

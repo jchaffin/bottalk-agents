@@ -112,6 +112,7 @@ async def start(request: dict | None = None):
         "--voice-id", voice1,
         "--goes-first",
         "--known-agents", all_names,
+        "--max-turns", "20",
     ])
     _procs.append(proc1)
 
@@ -125,6 +126,7 @@ async def start(request: dict | None = None):
         "--system-prompt", agent2["prompt"],
         "--voice-id", voice2,
         "--known-agents", all_names,
+        "--max-turns", "20",
     ])
     _procs.append(proc2)
 
