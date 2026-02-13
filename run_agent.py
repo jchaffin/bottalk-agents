@@ -2,7 +2,8 @@
 CLI entry point for running a single agent locally.
 
     python run_agent.py --room-url URL --token TOKEN --name Sarah \
-        --system-prompt "..." --voice-id "..." --goes-first
+        --system-prompt "..." --voice-id "..." --goes-first \
+        --known-agents "Sarah,Mike"
 """
 
 import argparse
@@ -29,7 +30,18 @@ async def main():
     p.add_argument("--system-prompt", required=True)
     p.add_argument("--voice-id", required=True)
     p.add_argument("--goes-first", action="store_true")
+    p.add_argument(
+        "--known-agents",
+        default="",
+        help="Comma-separated list of all agent names in the room",
+    )
     args = p.parse_args()
+
+    known = (
+        set(n.strip() for n in args.known_agents.split(",") if n.strip())
+        if args.known_agents
+        else None
+    )
 
     from agent import run_agent
 
@@ -40,6 +52,7 @@ async def main():
         system_prompt=args.system_prompt,
         voice_id=args.voice_id,
         goes_first=args.goes_first,
+        known_agents=known,
     )
 
 

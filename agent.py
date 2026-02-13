@@ -240,8 +240,6 @@ def _patch_transcription_filter(
     return self_id
 
 
-KNOWN_AGENTS = {"Sarah", "Mike"}
-
 async def run_agent(
     *,
     room_url: str,
@@ -251,6 +249,7 @@ async def run_agent(
     voice_id: str,
     goes_first: bool = False,
     name_filter: bool = False,
+    known_agents: set[str] | None = None,
 ):
     """Join *room_url* as *name* and run an LLM voice pipeline.
 
@@ -394,9 +393,14 @@ async def run_agent(
     #      agent is present.
     # -----------------------------------------------------------------
 
+    # Build the set of agent names we recognise in this room.
+    # When not provided, fall back to just our own name (so we still
+    # filter self-echoes, but treat every other participant as an agent).
+    _agents = known_agents if known_agents else {name}
+
     def _is_other_agent(pname):
         """True if *pname* is a known agent that isn't us."""
-        return pname in KNOWN_AGENTS and pname != name
+        return pname in _agents and pname != name
 
     @transport.event_handler("on_joined")
     async def on_joined(t, data):
