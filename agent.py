@@ -236,12 +236,15 @@ async def run_agent(
 
     # -- Transport --
     # Connects to the Daily room with audio I/O and transcription enabled.
+    # Only the first agent starts transcription; the second just listens.
+    # Daily's room-level transcription can only be managed by the participant
+    # who started it — a second start attempt fails with UserMustBeAdmin.
     transport = DailyTransport(
         room_url, token, name,
         DailyParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            transcription_enabled=True,
+            transcription_enabled=goes_first,
         ),
     )
 
