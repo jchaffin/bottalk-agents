@@ -1,57 +1,38 @@
 """
-Pipecat Cloud entry point — custom image without RTVI processor.
+Pipecat Cloud entry point.
 
-The default PCC base image wraps agents in an RTVI framework that
-validates all incoming Daily app-messages.  When two agents share
-a room, each agent's messages flood the other's RTVI processor
-with validation errors, choking the event loop.
+Receives session arguments from the platform and launches the
+appropriate voice agent (Sarah or Mike) into a shared Daily room.
 
-This custom image is a plain FastAPI server that exposes POST /bot
-(the endpoint PCC calls to start a session) and runs the agent
-directly — no RTVI layer.
+Since we create the Daily room ourselves (to put both agents in
+the same room), we do NOT use ``createDailyRoom`` in the start
+request.  All config comes via ``args.body``.
 """
 
-import asyncio
-import os
-
-from fastapi import FastAPI, Request
 from loguru import logger
-import uvicorn
+from pipecat.runner.types import RunnerArguments
 
 from agent import run_agent
 
-app = FastAPI()
 
+async def bot(args: RunnerArguments):
+    body = args.body or {}
 
-@app.post("/bot")
-async def start_bot(request: Request):
-    body = await request.json()
-    data = body.get("body", body)
+    room_url = body["room_url"]
+    token = body["token"]
+    name = body["name"]
+    system_prompt = body["system_prompt"]
+    voice_id = body["voice_id"]
+    goes_first = body.get("goes_first", False)
 
-    room_url = data.get("room_url")
-    token = data.get("token")
-    name = data["name"]
-    system_prompt = data["system_prompt"]
-    voice_id = data["voice_id"]
-    goes_first = data.get("goes_first", False)
+    session_id = getattr(args, "session_id", "local")
+    logger.info(f"[{name}] starting session {session_id} in {room_url}")
 
-    logger.info(f"[{name}] starting in {room_url}")
-
-    # Run the agent in a background task so the HTTP response returns immediately
-    asyncio.create_task(
-        run_agent(
-            room_url=room_url,
-            token=token,
-            name=name,
-            system_prompt=system_prompt,
-            voice_id=voice_id,
-            goes_first=goes_first,
-        )
+    await run_agent(
+        room_url=room_url,
+        token=token,
+        name=name,
+        system_prompt=system_prompt,
+        voice_id=voice_id,
+        goes_first=goes_first,
     )
-
-    return {"status": "ok"}
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run(app, host="0.0.0.0", port=port)

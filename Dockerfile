@@ -1,14 +1,7 @@
-FROM python:3.12-slim
+FROM dailyco/pipecat-base:latest
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential libsndfile1 && rm -rf /var/lib/apt/lists/*
+COPY ./requirements.txt requirements.txt
+RUN pip install --no-cache-dir --upgrade -r requirements.txt
 
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY bot.py agent.py ./
-
-EXPOSE 8080
-CMD ["python", "bot.py"]
+COPY ./bot.py bot.py
+COPY ./agent.py agent.py
