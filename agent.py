@@ -287,7 +287,7 @@ async def run_agent(
     _patch_app_message_filter(transport)
 
     # -- Services --
-    llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-4o")
+    llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-4o-mini")
     tts = ElevenLabsTTSService(api_key=os.getenv("ELEVENLABS_API_KEY"), voice_id=voice_id)
 
     # -- LLM context & aggregators --
