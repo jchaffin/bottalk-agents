@@ -24,6 +24,7 @@ from typing import Any, Mapping
 from loguru import logger
 
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     Frame,
     LLMFullResponseEndFrame,
@@ -296,8 +297,15 @@ async def run_agent(
     # is used on the user side to detect when the human stops speaking.
     msgs = [{"role": "system", "content": system_prompt}]
     ctx = LLMContext(msgs)
+    # stop_secs: how long to wait after silence before declaring the other
+    # speaker has finished.  Default 0.8 s is fine for human → bot, but in
+    # a bot-to-bot room the TTS can pause ~1 s between sentences, causing
+    # the listener to jump in mid-response.  2 s eliminates false triggers.
     user_agg, asst_agg = LLMContextAggregatorPair(
-        ctx, user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+        ctx,
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=2.0)),
+        ),
     )
 
     # -- Context trimmer --
