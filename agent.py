@@ -151,6 +151,31 @@ def _name_in_text(name: str, text: str) -> bool:
     return bool(re.search(pattern, text, re.IGNORECASE))
 
 
+def _patch_app_message_filter(transport: DailyTransport):
+    """Drop incoming ``outrival``-labelled app-messages before RTVI sees them.
+
+    When two agents share a room, each agent's ``LLMTextRelay`` sends
+    custom app-messages (``bot-llm-text``, etc.) via Daily's broadcast
+    ``send_app_message``.  The PCC base image wraps every agent with an
+    RTVI processor that validates ALL incoming transport messages.  Our
+    custom messages fail RTVI validation, flooding the event loop with
+    errors and choking the pipeline so the agent never responds.
+
+    Fix: intercept ``on_app_message`` on the low-level Daily client and
+    silently drop messages with ``label == "outrival"`` before they enter
+    the pipeline.  The browser client still receives them (it listens
+    via its own Daily call object, not through pipecat).
+    """
+    _orig = transport._client.on_app_message
+
+    def _filtered(message, sender):
+        if isinstance(message, dict) and message.get("label") == "outrival":
+            return
+        _orig(message, sender)
+
+    transport._client.on_app_message = _filtered
+
+
 def _patch_transcription_filter(
     transport: DailyTransport,
     name: str,
@@ -235,18 +260,31 @@ async def run_agent(
     """
 
     # -- Transport --
-    # Connects to the Daily room with audio I/O and transcription enabled.
-    # Only the first agent starts transcription; the second just listens.
-    # Daily's room-level transcription can only be managed by the participant
-    # who started it — a second start attempt fails with UserMustBeAdmin.
+    # Both agents need transcription_enabled=True so that
+    # capture_participant_transcription() actually works (the pipecat
+    # implementation early-returns when it's False).
+    #
+    # However, only ONE participant may call Daily's start_transcription
+    # — a second attempt fails with UserMustBeAdmin.  So for the agent
+    # that does NOT go first we monkey-patch start_transcription to a
+    # no-op; it will still receive transcription events once the first
+    # agent starts it (Daily broadcasts transcription-started to all).
     transport = DailyTransport(
         room_url, token, name,
         DailyParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            transcription_enabled=goes_first,
+            transcription_enabled=True,
         ),
     )
+
+    if not goes_first:
+        async def _noop_start(*a, **kw):
+            return None
+        transport._client.start_transcription = _noop_start
+
+    # -- Drop custom app-messages before RTVI validation --
+    _patch_app_message_filter(transport)
 
     # -- Services --
     llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-4o")
