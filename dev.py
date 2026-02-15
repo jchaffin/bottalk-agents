@@ -1,3 +1,5 @@
+# Copyright 2026 Jacob Chaffin / Outrival. All rights reserved.
+
 """
 Local dev server — runs agents as separate processes, no Pipecat Cloud needed.
 

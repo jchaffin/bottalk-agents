@@ -1,3 +1,5 @@
+# Copyright 2026 Jacob Chaffin / Outrival. All rights reserved.
+
 """
 Pipecat Cloud entry point.
 
@@ -9,16 +11,10 @@ the same room), we do NOT use ``createDailyRoom`` in the start
 request.  All config comes via ``args.body``.
 """
 
-import asyncio
-
 from loguru import logger
 from pipecat.runner.types import RunnerArguments
 
 from agent import run_agent
-
-# Seconds the second agent waits before joining. This gives the first
-# agent time to join the Daily room and start room-level transcription.
-_SECOND_AGENT_DELAY = 5
 
 
 async def bot(args: RunnerArguments):
@@ -35,15 +31,6 @@ async def bot(args: RunnerArguments):
 
     session_id = getattr(args, "session_id", "local")
     logger.info(f"[{name}] starting session {session_id} in {room_url} (max_turns={max_turns})")
-
-    # Let the first agent join and start transcription before the second
-    # agent enters the room (mirrors the 3-second sleep in dev.py).
-    if not goes_first:
-        logger.info(
-            f"[{name}] waiting {_SECOND_AGENT_DELAY}s for first agent "
-            "to start transcription"
-        )
-        await asyncio.sleep(_SECOND_AGENT_DELAY)
 
     await run_agent(
         room_url=room_url,

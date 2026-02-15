@@ -1,3 +1,5 @@
+# Copyright 2026 Jacob Chaffin / Outrival. All rights reserved.
+
 """
 CLI entry point for running a single agent locally.
 
