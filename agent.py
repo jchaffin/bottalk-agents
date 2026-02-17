@@ -27,12 +27,14 @@ from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
+    EndTaskFrame,
     Frame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMRunFrame,
     LLMTextFrame,
     OutputTransportMessageUrgentFrame,
+    TTSSpeakFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -324,10 +326,10 @@ async def run_agent(
         ctx.set_tools(ToolsSchema(standard_tools=[end_fn]))
 
         async def _handle_end_conversation(params):
-            logger.info(f"[{name}] end_conversation called — shutting down in 5s")
+            logger.info(f"[{name}] end_conversation called — stopping session")
             await params.result_callback({"status": "ending"})
-            await asyncio.sleep(5.0)
-            await task.cancel()
+            await params.llm.push_frame(TTSSpeakFrame("Thank you for the conversation. Goodbye!"))
+            await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
 
         llm.register_function("end_conversation", _handle_end_conversation)
 
