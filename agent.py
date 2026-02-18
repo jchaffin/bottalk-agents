@@ -193,6 +193,8 @@ async def run_agent(
             audio_in_enabled=True,
             audio_out_enabled=True,
             transcription_enabled=True,
+            vad_enabled=True,
+            vad_analyzer=SileroVADAnalyzer(params=vad_params),
         ),
     )
     if not goes_first:
@@ -215,7 +217,6 @@ async def run_agent(
     user_params = LLMUserAggregatorParams(
         user_turn_strategies=user_turn_strategies or UserTurnStrategies(),
         user_turn_stop_timeout=user_turn_stop_timeout,
-        vad_analyzer=SileroVADAnalyzer(params=vad_params),
     )
     user_agg, asst_agg = LLMContextAggregatorPair(ctx, user_params=user_params)
 
