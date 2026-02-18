@@ -243,7 +243,6 @@ async def run_agent(
         session_id=session_id,
         metrics_store=metrics_store,
     )
-    latency_obs.set_transport(transport)
 
     task = PipelineTask(
         pipeline,

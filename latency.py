@@ -149,17 +149,8 @@ class LatencyMetricsObserver(BaseObserver):
         self._pending_llm: float | None = None
         self._pending_tts: float | None = None
 
-    def set_transport(self, transport):
-        self._transport = transport
-
     def _broadcast(self, data: dict):
-        """Send metrics as a Daily app-message so the browser observer gets them."""
-        if self._transport and hasattr(self._transport, "_client") and self._transport._client:
-            msg = json.dumps({"label": "metrics", **data})
-            try:
-                self._transport._client.send_app_message(msg, None)
-            except Exception:
-                pass
+        """Post metrics to the dashboard and HTTP endpoint."""
         _post(f"{_DASHBOARD_URL}/api/metrics", data)
 
     # ------------------------------------------------------------------
