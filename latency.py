@@ -166,7 +166,7 @@ class LatencyMetricsObserver(BaseObserver):
             url = f"https://api.daily.co/v1/rooms/{self._room_name}/send-app-message"
             _post(
                 url,
-                {"data": {**data, "label": "metrics"}},
+                {"data": {**data, "label": "metrics"}, "recipient": "*"},
                 headers={"Authorization": f"Bearer {_DAILY_API_KEY}"},
             )
 
