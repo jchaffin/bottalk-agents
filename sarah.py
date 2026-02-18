@@ -4,20 +4,7 @@ Sarah — sales rep participant.
     python sarah.py --room-url https://… --token …
 """
 
-import argparse
-import asyncio
 import os
-import sys
-
-from dotenv import load_dotenv
-from loguru import logger
-
-from pipecat.audio.vad.vad_analyzer import VADParams
-
-load_dotenv(".env.local", override=True)
-
-logger.remove(0)
-logger.add(sys.stderr, level="DEBUG", filter=lambda r: "rtvi" not in r["name"] and "vad" not in r["name"])
 
 TOPIC = os.getenv("CONVERSATION_TOPIC", "enterprise software sales")
 
@@ -27,8 +14,8 @@ You are on a live phone call with a potential customer about {TOPIC}.
 
 Your product — TechFlow — is an AI workflow automation platform that \
 integrates with Salesforce, HubSpot, Slack, Jira, and 50+ other tools. \
-Professional tier: $99/user/month. 30-day free trial. \
-Case study: Acme Corp cut manual work by 60% in 3 months.
+Professional tier: $99/user/month. 30-day free trial. Case study: Acme \
+Corp cut manual work by 60% in 3 months.
 
 Rules:
 - 2-3 short spoken sentences per turn. No bullets, no markdown, no emoji.
@@ -46,35 +33,47 @@ CONFIG = {
 
 def get_voice_config() -> dict:
     """Return VAD kwargs for run_agent()."""
+    from pipecat.audio.vad.vad_analyzer import VADParams
+
     return {
         "allow_interruptions": True,
         "vad_params": VADParams(threshold=0.6, min_volume=0.4, stop_secs=1.5),
     }
 
 
-async def main(room_url: str, token: str):
-    from agent import run_agent
-
-    logger.info(f"[Sarah] joining {room_url}")
-    await run_agent(
-        room_url=room_url,
-        token=token,
-        name="Sarah",
-        system_prompt=SYSTEM_PROMPT,
-        voice_id=VOICE_ID,
-        goes_first=True,
-        known_agents={"Sarah", "Mike"},
-        max_turns=20,
-        allow_interruptions=True,
-        vad_params=VADParams(
-            threshold=0.6,
-            min_volume=0.4,
-            stop_secs=1.5,
-        ),
-    )
-
+# --- CLI entry point (local dev only) ---
 
 if __name__ == "__main__":
+    import argparse
+    import asyncio
+    import sys
+
+    from dotenv import load_dotenv
+    from loguru import logger
+
+    load_dotenv(".env.local", override=True)
+
+    logger.remove(0)
+    logger.add(sys.stderr, level="DEBUG", filter=lambda r: "rtvi" not in r["name"] and "vad" not in r["name"])
+
+    async def main(room_url: str, token: str):
+        from agent import run_agent
+
+        voice_cfg = get_voice_config()
+
+        logger.info(f"[Sarah] joining {room_url}")
+        await run_agent(
+            room_url=room_url,
+            token=token,
+            name="Sarah",
+            system_prompt=SYSTEM_PROMPT,
+            voice_id=VOICE_ID,
+            goes_first=True,
+            known_agents={"Sarah", "Mike"},
+            max_turns=20,
+            **voice_cfg,
+        )
+
     p = argparse.ArgumentParser()
     p.add_argument("--room-url", required=True)
     p.add_argument("--token", required=True)
