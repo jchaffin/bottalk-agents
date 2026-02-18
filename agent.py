@@ -193,7 +193,6 @@ async def run_agent(
             audio_in_enabled=True,
             audio_out_enabled=True,
             transcription_enabled=True,
-            vad_enabled=True,
             vad_analyzer=SileroVADAnalyzer(params=vad_params),
         ),
     )
