@@ -244,15 +244,15 @@ async def run_agent(
             enable_metrics=True,
             enable_usage_metrics=True,
             allow_interruptions=allow_interruptions,
+            observers=[
+                MetricsLogObserver(),
+                LatencyMetricsObserver(
+                    agent_name=name,
+                    session_id=session_id,
+                    metrics_store=metrics_store,
+                ),
+            ],
         ),
-        observers=[
-            MetricsLogObserver(),
-            LatencyMetricsObserver(
-                agent_name=name,
-                session_id=session_id,
-                metrics_store=metrics_store,
-            ),
-        ],
     )
     limiter.set_task(task)
 

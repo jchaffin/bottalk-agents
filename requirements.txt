@@ -1,4 +1,4 @@
-pipecat-ai[daily,openai,elevenlabs,local_smart_turn-v3]
+pipecat-ai[daily,openai,elevenlabs,local_smart_turn-v3]==0.0.100
 python-dotenv
 aiohttp
 loguru
