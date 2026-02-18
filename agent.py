@@ -238,10 +238,14 @@ async def run_agent(
         limiter,
     ])
 
+    # Extract room name from URL for Daily REST API app-message broadcast
+    room_name = room_url.rstrip("/").rsplit("/", 1)[-1] if room_url else ""
+
     latency_obs = LatencyMetricsObserver(
         agent_name=name,
         session_id=session_id,
         metrics_store=metrics_store,
+        room_name=room_name,
     )
 
     task = PipelineTask(

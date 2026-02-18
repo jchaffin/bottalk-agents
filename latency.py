@@ -40,16 +40,20 @@ from pipecat.processors.frame_processor import FrameDirection
 
 _DASHBOARD_URL = os.getenv("DASHBOARD_URL", "http://localhost:8000")
 _METRICS_URL = os.getenv("METRICS_URL", "")
+_DAILY_API_KEY = os.getenv("DAILY_API_KEY", "")
 
 
-def _post(url: str, data: dict):
+def _post(url: str, data: dict, *, headers: dict | None = None):
     """Fire-and-forget POST."""
+    hdrs = {"Content-Type": "application/json"}
+    if headers:
+        hdrs.update(headers)
     def _send():
         try:
             req = urllib.request.Request(
                 url,
                 data=json.dumps(data).encode(),
-                headers={"Content-Type": "application/json"},
+                headers=hdrs,
             )
             urllib.request.urlopen(req, timeout=2)
         except Exception:
@@ -119,12 +123,14 @@ class LatencyMetricsObserver(BaseObserver):
         session_id: str = "",
         metrics_store: list[dict[str, Any]] | None = None,
         metrics_url: str | None = None,
+        room_name: str = "",
     ):
         super().__init__()
         self._agent_name = agent_name
         self._session_id = session_id or f"{agent_name}-{int(time.time())}"
         self._metrics_store = metrics_store
         self._metrics_url = metrics_url or _METRICS_URL
+        self._room_name = room_name
         self._seen_frames: set[str] = set()
 
         # Per-processor series:  {"OpenAI LLM": [0.32, 0.28, ...], ...}
@@ -149,8 +155,20 @@ class LatencyMetricsObserver(BaseObserver):
         self._pending_tts: float | None = None
 
     def _broadcast(self, data: dict):
-        """Post metrics to the dashboard HTTP endpoint."""
+        """Post metrics to the dashboard and broadcast as a Daily app-message.
+
+        The Daily REST API ``POST /rooms/:name/send-app-message`` delivers
+        the payload to all room participants (including the browser observer)
+        without touching the Pipecat pipeline or Daily SDK event loop.
+        """
         _post(f"{_DASHBOARD_URL}/api/metrics", data)
+        if self._room_name and _DAILY_API_KEY:
+            url = f"https://api.daily.co/v1/rooms/{self._room_name}/send-app-message"
+            _post(
+                url,
+                {"data": {**data, "label": "metrics"}},
+                headers={"Authorization": f"Bearer {_DAILY_API_KEY}"},
+            )
 
     # ------------------------------------------------------------------
     # Observer hook
