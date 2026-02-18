@@ -45,7 +45,7 @@ def get_voice_config() -> dict:
         params=SmartTurnParams(stop_secs=3.0),
     )
     return {
-        "allow_interruptions": False,
+        "allow_interruptions": True,
         "user_turn_stop_timeout": 1.5,
         "vad_params": VADParams(threshold=0.6, min_volume=0.4, stop_secs=0.8),
         "user_turn_strategies": UserTurnStrategies(
