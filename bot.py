@@ -17,6 +17,7 @@ round-trip::
     GET /v1/public/{agent}/sessions/{sessionId}/metrics
 """
 
+import json
 from typing import Any
 
 from loguru import logger
@@ -52,6 +53,13 @@ _session_info: dict[str, Any] = {}
 try:
     from pipecatcloud_system import app  # type: ignore[import-untyped]
 
+    def _safe_json(obj: Any) -> Any:
+        """Return a JSON-serializable copy (fallback: string)."""
+        try:
+            return json.loads(json.dumps(obj, default=str))
+        except Exception:
+            return str(obj)
+
     @app.get("/metrics")
     async def get_metrics():
         """Return accumulated latency metrics for this session."""
@@ -77,7 +85,7 @@ try:
         ubl = _vals("user_bot_latency")
 
         return {
-            "session": _session_info,
+            "session": _safe_json(_session_info),
             "count": count,
             "aggregates": {
                 "ttfb": {"avg": _avg(ttfb), "p95": _p95(ttfb)},
@@ -86,7 +94,7 @@ try:
                 "e2e": {"avg": _avg(e2e), "p95": _p95(e2e)},
                 "user_bot_latency": {"avg": _avg(ubl), "p95": _p95(ubl)},
             },
-            "kpis": dict(_session_kpis),
+            "kpis": _safe_json(_session_kpis),
             "timeseries": items,
         }
 
@@ -108,22 +116,22 @@ try:
         ubl = _vals("user_bot_latency")
 
         return {
-            "session": _session_info,
+            "session": _safe_json(_session_info),
             "count": len(items),
             "ttfb_avg": _avg(ttfb),
             "llm_avg": _avg(llm),
             "tts_avg": _avg(tts),
             "e2e_avg": _avg(e2e),
             "user_bot_latency_avg": _avg(ubl),
-            "kpis": dict(_session_kpis),
+            "kpis": _safe_json(_session_kpis),
         }
 
     @app.get("/kpis")
     async def get_kpis():
         """Return conversation-level KPIs for this session."""
         return {
-            "session": _session_info,
-            "kpis": dict(_session_kpis),
+            "session": _safe_json(_session_info),
+            "kpis": _safe_json(_session_kpis),
         }
 
     logger.info("PCC Session API: /metrics, /metrics/summary, and /kpis registered")

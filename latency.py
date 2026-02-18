@@ -44,10 +44,15 @@ _DAILY_API_KEY = os.getenv("DAILY_API_KEY", "")
 
 
 def _post(url: str, data: dict, *, headers: dict | None = None):
-    """Fire-and-forget POST."""
+    """Fire-and-forget POST.
+
+    Note: we keep this best-effort for the dashboard URL, but we do log failures
+    for Daily REST API calls because the UI depends on those messages in PCC mode.
+    """
     hdrs = {"Content-Type": "application/json"}
     if headers:
         hdrs.update(headers)
+    is_daily = "api.daily.co" in url and "/send-app-message" in url
     def _send():
         try:
             req = urllib.request.Request(
@@ -56,8 +61,15 @@ def _post(url: str, data: dict, *, headers: dict | None = None):
                 headers=hdrs,
             )
             urllib.request.urlopen(req, timeout=2)
-        except Exception:
-            pass
+        except Exception as e:
+            if is_daily:
+                body = ""
+                if hasattr(e, "read"):
+                    try:
+                        body = e.read().decode()[:200]
+                    except Exception:
+                        pass
+                logger.warning(f"Daily send-app-message failed: {e} | {body}")
     threading.Thread(target=_send, daemon=True).start()
 
 
@@ -132,6 +144,11 @@ class LatencyMetricsObserver(BaseObserver):
         self._metrics_url = metrics_url or _METRICS_URL
         self._room_name = room_name
         self._seen_frames: set[str] = set()
+        # Helpful for PCC debugging; safe to leave enabled (one-time per session).
+        logger.info(
+            f"[{agent_name}] LatencyMetricsObserver init: "
+            f"room_name={room_name!r}, daily_key={'set' if _DAILY_API_KEY else 'MISSING'}"
+        )
 
         # Per-processor series:  {"OpenAI LLM": [0.32, 0.28, ...], ...}
         self._ttfb: dict[str, list[float]] = defaultdict(list)
