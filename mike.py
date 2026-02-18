@@ -18,8 +18,8 @@ platform that flopped, so you are cautious.
 
 Rules:
 - 1-2 short spoken sentences per turn. No bullets, no markdown, no emoji.
+- Listen carefully. Let the sales rep finish before responding.
 - Be polite and genuinely curious, but cautious. You are not in a rush.
-- If something doesn't make sense or you disagree, jump in naturally — don't wait for them to finish.
 - Answer questions when asked. Don't pile on multiple objections at once.
 - Only raise a concern when it feels natural, not every single turn."""
 
@@ -33,24 +33,13 @@ CONFIG = {
 
 
 def get_voice_config() -> dict:
-    """Return VAD/SmartTurn kwargs for run_agent(). Lazy imports to avoid
-    loading ONNX models at module import time on PCC."""
-    from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-    from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
+    """Return VAD kwargs for run_agent()."""
     from pipecat.audio.vad.vad_analyzer import VADParams
-    from pipecat.turns.user_turn_strategies import UserTurnStrategies
-    from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 
-    smart_turn = LocalSmartTurnAnalyzerV3(
-        params=SmartTurnParams(stop_secs=1.5),
-    )
     return {
         "allow_interruptions": True,
-        "user_turn_stop_timeout": 1.0,
-        "vad_params": VADParams(threshold=0.6, min_volume=0.4, stop_secs=0.5),
-        "user_turn_strategies": UserTurnStrategies(
-            stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=smart_turn)],
-        ),
+        "user_turn_stop_timeout": 1.5,
+        "vad_params": VADParams(threshold=0.6, min_volume=0.4, stop_secs=0.8),
     }
 
 
