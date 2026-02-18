@@ -369,6 +369,10 @@ async def run_agent(
         if goes_first and not started and _matches_known_agent_name(pname):
             started = True
             _kick(msgs, task, name)
+        elif not _matches_known_agent_name(pname):
+            # Non-agent participant (browser observer) joined late —
+            # re-broadcast full metric history so it can catch up.
+            latency_obs.broadcast_history()
 
     @transport.event_handler("on_participant_left")
     async def on_leave(t, p, reason):

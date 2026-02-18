@@ -43,33 +43,37 @@ _METRICS_URL = os.getenv("METRICS_URL", "")
 _DAILY_API_KEY = os.getenv("DAILY_API_KEY", "")
 
 
-def _post(url: str, data: dict, *, headers: dict | None = None):
-    """Fire-and-forget POST.
-
-    Note: we keep this best-effort for the dashboard URL, but we do log failures
-    for Daily REST API calls because the UI depends on those messages in PCC mode.
-    """
+def _post(url: str, data: dict, *, headers: dict | None = None, retries: int = 0):
+    """POST with optional retries for critical endpoints (Daily app-messages)."""
     hdrs = {"Content-Type": "application/json"}
     if headers:
         hdrs.update(headers)
     is_daily = "api.daily.co" in url and "/send-app-message" in url
+    max_attempts = (retries + 1) if is_daily else 1
+
     def _send():
-        try:
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(data).encode(),
-                headers=hdrs,
-            )
-            urllib.request.urlopen(req, timeout=2)
-        except Exception as e:
-            if is_daily:
-                body = ""
-                if hasattr(e, "read"):
-                    try:
-                        body = e.read().decode()[:200]
-                    except Exception:
-                        pass
-                logger.warning(f"Daily send-app-message failed: {e} | {body}")
+        payload = json.dumps(data).encode()
+        for attempt in range(max_attempts):
+            try:
+                req = urllib.request.Request(url, data=payload, headers=hdrs)
+                urllib.request.urlopen(req, timeout=3)
+                return
+            except Exception as e:
+                if is_daily:
+                    body = ""
+                    if hasattr(e, "read"):
+                        try:
+                            body = e.read().decode()[:200]
+                        except Exception:
+                            pass
+                    if attempt < max_attempts - 1:
+                        time.sleep(0.3 * (attempt + 1))
+                    else:
+                        logger.warning(
+                            f"Daily send-app-message failed after {max_attempts} "
+                            f"attempts: {e} | {body}"
+                        )
+
     threading.Thread(target=_send, daemon=True).start()
 
 
@@ -144,7 +148,7 @@ class LatencyMetricsObserver(BaseObserver):
         self._metrics_url = metrics_url or _METRICS_URL
         self._room_name = room_name
         self._seen_frames: set[str] = set()
-        # Helpful for PCC debugging; safe to leave enabled (one-time per session).
+        self._event_history: list[dict] = []
         logger.info(
             f"[{agent_name}] LatencyMetricsObserver init: "
             f"room_name={room_name!r}, daily_key={'set' if _DAILY_API_KEY else 'MISSING'}"
@@ -178,6 +182,7 @@ class LatencyMetricsObserver(BaseObserver):
         the payload to all room participants (including the browser observer)
         without touching the Pipecat pipeline or Daily SDK event loop.
         """
+        self._event_history.append(data)
         _post(f"{_DASHBOARD_URL}/api/metrics", data)
         if self._room_name and _DAILY_API_KEY:
             url = f"https://api.daily.co/v1/rooms/{self._room_name}/send-app-message"
@@ -185,6 +190,20 @@ class LatencyMetricsObserver(BaseObserver):
                 url,
                 {"data": {**data, "label": "metrics"}, "recipient": "*"},
                 headers={"Authorization": f"Bearer {_DAILY_API_KEY}"},
+                retries=2,
+            )
+
+    def broadcast_history(self):
+        """Re-broadcast all past events so a late-joining browser can catch up."""
+        if not self._room_name or not _DAILY_API_KEY:
+            return
+        url = f"https://api.daily.co/v1/rooms/{self._room_name}/send-app-message"
+        for data in self._event_history:
+            _post(
+                url,
+                {"data": {**data, "label": "metrics", "replay": True}, "recipient": "*"},
+                headers={"Authorization": f"Bearer {_DAILY_API_KEY}"},
+                retries=1,
             )
 
     # ------------------------------------------------------------------
