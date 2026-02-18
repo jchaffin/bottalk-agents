@@ -29,7 +29,7 @@ async def main():
     p.add_argument("--room-url", required=True)
     p.add_argument("--token", required=True)
     p.add_argument("--name", required=True)
-    p.add_argument("--system-prompt", required=True)
+    p.add_argument("--system-prompt", default="")
     p.add_argument("--voice-id", required=True)
     p.add_argument("--goes-first", action="store_true")
     p.add_argument(

@@ -1,2 +1,4 @@
-pipecat-ai[daily,openai,elevenlabs,silero]
+pipecat-ai[daily,openai,elevenlabs,local_smart_turn-v3]
+python-dotenv
+aiohttp
 loguru

@@ -1,5 +1,3 @@
-# Copyright 2026 Jacob Chaffin / Outrival. All rights reserved.
-
 """
 Reusable Pipecat voice agent that joins a Daily room.
 
@@ -9,16 +7,17 @@ Daily's room-level Deepgram transcription broadcasts every participant's
 speech to ALL participants.  Without filtering, each bot "hears" its own
 TTS output echoed back as user input — infinite feedback loop.
 
-We patch the transport's transcription callback to silently drop any
-transcription whose ``participantId`` matches this bot.  When
-``name_filter=True``, we additionally require the bot's name to appear
-as a whole word in the transcription text.
+A ``TranscriptionFilter`` FrameProcessor sits in the pipeline between
+``transport.input()`` and the user aggregator.  It drops any
+``TranscriptionFrame`` / ``InterimTranscriptionFrame`` whose ``user_id``
+matches this bot's participant ID.  When ``name_filter=True``, it
+additionally requires the bot's name to appear as a whole word in the
+transcription text.
 """
 
 import asyncio
 import os
 import re
-from typing import Any
 
 from loguru import logger
 
@@ -29,11 +28,10 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     EndTaskFrame,
     Frame,
+    InterimTranscriptionFrame,
     LLMFullResponseEndFrame,
-    LLMFullResponseStartFrame,
     LLMRunFrame,
-    LLMTextFrame,
-    OutputTransportMessageUrgentFrame,
+    TranscriptionFrame,
     TTSSpeakFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
@@ -44,20 +42,70 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from pipecat.processors.frameworks.rtvi import RTVIObserverParams
 from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
+
+from latency import LatencyMetricsObserver
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
 
-# Must match APP_MESSAGE_LABEL in frontend/src/lib/config.ts
-APP_MESSAGE_LABEL = "outrival"
+
+KNOWN_AGENTS = {"Sarah", "Mike"}
 
 
 # ---------------------------------------------------------------------------
 # Pipeline processors
 # ---------------------------------------------------------------------------
+
+class TranscriptionFilter(FrameProcessor):
+    """Drop transcription frames that came from this bot (self-echo) or
+    that don't mention this bot's name (when *name_filter* is enabled).
+
+    Works at the pipeline level — no monkey-patching of transport internals.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        self_id: list[str],
+        name_filter: bool = False,
+    ):
+        super().__init__()
+        self._name = name
+        self._self_id = self_id
+        self._name_filter = name_filter
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)):
+            sender = frame.user_id
+            text = frame.text
+            is_final = isinstance(frame, TranscriptionFrame)
+
+            if is_final:
+                logger.debug(
+                    f"[{self._name}] transcript: sender={sender}, "
+                    f"self={self._self_id}, text={text[:60]}"
+                )
+
+            # Drop our own speech echoed back via Deepgram.
+            if self._self_id and sender == self._self_id[0]:
+                return
+
+            # Optionally require the bot's name to appear in the text.
+            if self._name_filter and not _name_in_text(self._name, text):
+                if is_final:
+                    logger.debug(
+                        f"[{self._name}] dropping (not addressed): {text[:60]}"
+                    )
+                return
+
+        await self.push_frame(frame, direction)
+
 
 class ConversationLimiter(FrameProcessor):
     """Hard-stop after *max_turns* LLM responses to prevent runaway usage."""
@@ -83,76 +131,6 @@ class ConversationLimiter(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
-class ContextTrimmer(FrameProcessor):
-    """Sliding-window trim on the LLM message list.
-
-    Keeps the system prompt(s) and the last *max_turns* exchanges.
-    Without trimming, TTFT grows linearly and the transcript visibly
-    lags behind TTS audio after ~10 turns.
-    """
-
-    def __init__(self, messages: list, *, max_turns: int = 10):
-        super().__init__()
-        self._messages = messages
-        self._max_turns = max_turns
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection):
-        await super().process_frame(frame, direction)
-        if isinstance(frame, LLMFullResponseEndFrame):
-            self._trim()
-        await self.push_frame(frame, direction)
-
-    def _trim(self):
-        limit = self._max_turns * 2
-        n_sys = sum(1 for m in self._messages if m.get("role") == "system")
-        n_convo = len(self._messages) - n_sys
-        if n_convo > limit:
-            drop = n_convo - limit
-            del self._messages[n_sys : n_sys + drop]
-            logger.debug(f"Trimmed {drop} msgs, kept {n_sys} sys + {n_convo - drop} convo")
-
-
-class LLMTextRelay(FrameProcessor):
-    """Batch LLM tokens into chunked ``bot-llm-text`` app-messages.
-
-    Flushing every ~100 chars keeps the Daily signaling channel at
-    2-3 msgs/sec instead of 50, preventing transcript lag.
-    """
-
-    _FLUSH_CHARS = 100
-
-    def __init__(self):
-        super().__init__()
-        self._buffer = ""
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection):
-        await super().process_frame(frame, direction)
-
-        if isinstance(frame, LLMFullResponseStartFrame):
-            self._buffer = ""
-            await self._send({"label": APP_MESSAGE_LABEL, "type": "bot-llm-started"})
-        elif isinstance(frame, LLMTextFrame):
-            self._buffer += frame.text
-            if len(self._buffer) >= self._FLUSH_CHARS:
-                await self._flush()
-        elif isinstance(frame, LLMFullResponseEndFrame):
-            await self._flush()
-            await self._send({"label": APP_MESSAGE_LABEL, "type": "bot-llm-stopped"})
-
-        await self.push_frame(frame, direction)
-
-    async def _flush(self):
-        if self._buffer:
-            text, self._buffer = self._buffer, ""
-            await self._send({
-                "label": APP_MESSAGE_LABEL,
-                "type": "bot-llm-text",
-                "data": {"text": text},
-            })
-
-    async def _send(self, message: dict):
-        await self.push_frame(OutputTransportMessageUrgentFrame(message=message))
-
 
 # ---------------------------------------------------------------------------
 # Transport patches
@@ -163,66 +141,20 @@ def _name_in_text(name: str, text: str) -> bool:
     return bool(re.search(r"\b" + re.escape(name) + r"\b", text, re.IGNORECASE))
 
 
-def _patch_app_message_filter(transport: DailyTransport):
-    """Drop incoming app-messages with our label before RTVI validation.
-
-    Without this, our custom messages fail RTVI validation and flood
-    the event loop with errors, choking the pipeline.
-    """
-    orig = transport._client.on_app_message
-
-    def filtered(message, sender):
-        if isinstance(message, dict) and message.get("label") == APP_MESSAGE_LABEL:
-            return
-        orig(message, sender)
-
-    transport._client.on_app_message = filtered
-
-
-def _patch_transcription_filter(
-    transport: DailyTransport, name: str, name_filter: bool,
-) -> list[str]:
-    """Filter self-transcription (and optionally non-addressed speech).
-
-    Returns a mutable list for storing this bot's participant ID.
-    """
-    self_id: list[str] = []
-    orig = transport._client.on_transcription_message
-
-    def filtered(message):
-        sender = message.get("participantId", "")
-        is_final = message.get("rawResponse", {}).get("is_final", False)
-        text = message.get("text", "")
-
-        if is_final:
-            logger.debug(f"[{name}] transcript: sender={sender}, self={self_id}, text={text[:60]}")
-
-        # Drop self-echo.
-        if self_id and sender == self_id[0]:
-            return
-
-        # Optional name gate.
-        if name_filter and not _name_in_text(name, text):
-            if is_final:
-                logger.debug(f"[{name}] dropping (not addressed): {text[:60]}")
-            return
-
-        orig(message)
-
-    transport._client.on_transcription_message = filtered
-    return self_id
-
-
 def _noop_start_transcription(transport: DailyTransport):
     """Prevent the second agent from calling start_transcription.
 
     Only one participant may start it; the second attempt raises
     UserMustBeAdmin.  The second agent still receives transcription
     events once the first agent starts it.
+
+    We patch the *DailyTransport* method directly (not the internal
+    ``_client``) so the override is guaranteed to be hit by Pipecat's
+    join handler.
     """
     async def _noop(*a, **kw):
         return None
-    transport._client.start_transcription = _noop
+    transport.start_transcription = _noop  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -240,10 +172,21 @@ async def run_agent(
     name_filter: bool = False,
     known_agents: set[str] | None = None,
     max_turns: int = 20,
+    allow_interruptions: bool = False,
+    user_turn_strategies: UserTurnStrategies | None = None,
+    user_turn_stop_timeout: float = 5.0,
+    vad_params: VADParams | None = None,
+    llm_model: str = "gpt-4o-mini",
+    session_id: str = "",
+    metrics_store: list | None = None,
+    kpi_store: dict | None = None,
 ):
     """Join *room_url* as *name* and run an LLM voice pipeline."""
 
-    # -- Transport (audio-only, auto-subscribe) --
+    if vad_params is None:
+        vad_params = VADParams(threshold=0.6, min_volume=0.4, stop_secs=0.2)
+
+    # -- Transport --
     transport = DailyTransport(
         room_url, token, name,
         DailyParams(
@@ -254,38 +197,44 @@ async def run_agent(
     )
     if not goes_first:
         _noop_start_transcription(transport)
-    _patch_app_message_filter(transport)
 
     # -- Services --
-    llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-4o-mini")
+    llm = OpenAILLMService(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        model=llm_model,
+        params=OpenAILLMService.InputParams(
+            max_completion_tokens=200,
+            temperature=0.7,
+        ),
+    )
     tts = ElevenLabsTTSService(api_key=os.getenv("ELEVENLABS_API_KEY"), voice_id=voice_id)
 
     # -- Context & aggregators --
     msgs = [{"role": "system", "content": system_prompt}]
     ctx = LLMContext(msgs)
-    user_agg, asst_agg = LLMContextAggregatorPair(
-        ctx,
-        user_params=LLMUserAggregatorParams(
-            # 2 s silence threshold — prevents false triggers in bot-to-bot rooms
-            # where TTS pauses ~1 s between sentences.
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=2.0)),
-        ),
+    user_params = LLMUserAggregatorParams(
+        user_turn_strategies=user_turn_strategies or UserTurnStrategies(),
+        user_turn_stop_timeout=user_turn_stop_timeout,
+        vad_analyzer=SileroVADAnalyzer(params=vad_params),
     )
+    user_agg, asst_agg = LLMContextAggregatorPair(ctx, user_params=user_params)
 
     # -- Processors --
-    trimmer = ContextTrimmer(msgs, max_turns=10)
+    self_id: list[str] = []
+    tx_filter = TranscriptionFilter(
+        name=name, self_id=self_id, name_filter=name_filter,
+    )
     limiter = ConversationLimiter(max_turns=max_turns)
 
     # -- Pipeline --
     pipeline = Pipeline([
         transport.input(),
+        tx_filter,
         user_agg,
         llm,
-        LLMTextRelay(),
         tts,
         transport.output(),
         asst_agg,
-        trimmer,
         limiter,
     ])
 
@@ -294,19 +243,16 @@ async def run_agent(
         params=PipelineParams(
             enable_metrics=True,
             enable_usage_metrics=True,
-            allow_interruptions=False,
+            allow_interruptions=allow_interruptions,
         ),
-        observers=[MetricsLogObserver()],
-        rtvi_observer_params=RTVIObserverParams(
-            bot_llm_enabled=False,
-            bot_tts_enabled=False,
-            bot_output_enabled=False,
-            bot_speaking_enabled=False,
-            user_llm_enabled=False,
-            user_speaking_enabled=False,
-            user_transcription_enabled=False,
-            metrics_enabled=False,
-        ),
+        observers=[
+            MetricsLogObserver(),
+            LatencyMetricsObserver(
+                agent_name=name,
+                session_id=session_id,
+                metrics_store=metrics_store,
+            ),
+        ],
     )
     limiter.set_task(task)
 
@@ -329,16 +275,17 @@ async def run_agent(
             logger.info(f"[{name}] end_conversation called — stopping session")
             await params.result_callback({"status": "ending"})
             await params.llm.push_frame(TTSSpeakFrame("Thank you for the conversation. Goodbye!"))
+            try:
+                await transport.stop_transcription()
+            except Exception:
+                pass
             await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
 
         llm.register_function("end_conversation", _handle_end_conversation)
 
-    # -- Transcription filter --
-    self_id = _patch_transcription_filter(transport, name, name_filter)
-
     # -- Event handlers --
     started = False
-    agents = known_agents if known_agents else {name}
+    agents = known_agents if known_agents else KNOWN_AGENTS
 
     def _is_other_agent(pname: str) -> bool:
         return pname in agents and pname != name
