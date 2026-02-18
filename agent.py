@@ -257,6 +257,7 @@ async def run_agent(
         ],
     )
     limiter.set_task(task)
+    latency_obs.set_task(task)
 
     # -- end_conversation tool (goes_first agent only) --
     if goes_first:

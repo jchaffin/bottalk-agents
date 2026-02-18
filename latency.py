@@ -125,7 +125,7 @@ class LatencyMetricsObserver(BaseObserver):
         self._session_id = session_id or f"{agent_name}-{int(time.time())}"
         self._metrics_store = metrics_store
         self._metrics_url = metrics_url or _METRICS_URL
-        self._transport = None
+        self._task = None
         self._seen_frames: set[str] = set()
 
         # Per-processor series:  {"OpenAI LLM": [0.32, 0.28, ...], ...}
@@ -149,8 +149,20 @@ class LatencyMetricsObserver(BaseObserver):
         self._pending_llm: float | None = None
         self._pending_tts: float | None = None
 
+    def set_task(self, task):
+        self._task = task
+
     def _broadcast(self, data: dict):
-        """Post metrics to the dashboard and HTTP endpoint."""
+        """Send metrics as a Daily app-message (via pipeline frame) and HTTP POST."""
+        if self._task:
+            try:
+                import asyncio
+                from pipecat.transports.daily.transport import DailyOutputTransportMessageFrame
+                msg = json.dumps({"label": "metrics", **data})
+                frame = DailyOutputTransportMessageFrame(message=msg)
+                asyncio.ensure_future(self._task.queue_frames([frame]))
+            except Exception as e:
+                logger.debug(f"app-message broadcast failed: {e}")
         _post(f"{_DASHBOARD_URL}/api/metrics", data)
 
     # ------------------------------------------------------------------
