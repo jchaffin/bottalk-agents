@@ -125,6 +125,7 @@ class LatencyMetricsObserver(BaseObserver):
         self._session_id = session_id or f"{agent_name}-{int(time.time())}"
         self._metrics_store = metrics_store
         self._metrics_url = metrics_url or _METRICS_URL
+        self._transport = None
         self._seen_frames: set[str] = set()
 
         # Per-processor series:  {"OpenAI LLM": [0.32, 0.28, ...], ...}
@@ -147,6 +148,20 @@ class LatencyMetricsObserver(BaseObserver):
         self._pending_ttfb: float | None = None
         self._pending_llm: float | None = None
         self._pending_tts: float | None = None
+
+    def set_transport(self, transport):
+        self._transport = transport
+
+    def _broadcast(self, data: dict):
+        """Send metrics as a Daily app-message so the browser observer gets them."""
+        if self._transport:
+            import asyncio
+            msg = json.dumps({"label": "metrics", **data})
+            try:
+                asyncio.ensure_future(self._transport.send_app_message(msg))
+            except Exception:
+                pass
+        _post(f"{_DASHBOARD_URL}/api/metrics", data)
 
     # ------------------------------------------------------------------
     # Observer hook
@@ -208,7 +223,7 @@ class LatencyMetricsObserver(BaseObserver):
             self._last_e2e = latency
             tag = f"[{self._agent_name}] " if self._agent_name else ""
             logger.info(f"{tag}user->bot latency: {_fmt(latency)}")
-            _post(f"{_DASHBOARD_URL}/api/metrics", {
+            self._broadcast({
                 "type": "e2e",
                 "agent": self._agent_name,
                 "value": latency,
@@ -241,8 +256,7 @@ class LatencyMetricsObserver(BaseObserver):
             f"heard={input_text[:80]!r} -> replied={output_text[:80]!r}"
         )
 
-        # Dashboard event
-        _post(f"{_DASHBOARD_URL}/api/metrics", {
+        self._broadcast({
             "type": "turn",
             "agent": self._agent_name,
             "turn": self._turn_count,
@@ -260,6 +274,8 @@ class LatencyMetricsObserver(BaseObserver):
             "session_id": self._session_id,
             "agent_name": self._agent_name,
             "turn_index": self._turn_count - 1,
+            "input": input_text,
+            "output": output_text,
             "ttfb": _ms(self._pending_ttfb),
             "llm_duration": _ms(self._pending_llm),
             "tts_duration": _ms(self._pending_tts),
@@ -292,7 +308,7 @@ class LatencyMetricsObserver(BaseObserver):
             self._ttfb[label].append(md.value)
             if not is_tts:
                 self._pending_ttfb = md.value
-            _post(f"{_DASHBOARD_URL}/api/metrics", {
+            self._broadcast({
                 "type": "ttfb",
                 "agent": self._agent_name,
                 "processor": label,
@@ -305,7 +321,7 @@ class LatencyMetricsObserver(BaseObserver):
                 self._pending_tts = md.value
             else:
                 self._pending_llm = md.value
-            _post(f"{_DASHBOARD_URL}/api/metrics", {
+            self._broadcast({
                 "type": "processing",
                 "agent": self._agent_name,
                 "processor": label,
@@ -347,7 +363,7 @@ class LatencyMetricsObserver(BaseObserver):
         if self._e2e_latencies:
             summary["e2e"] = _stats_dict(self._e2e_latencies)
         if summary:
-            _post(f"{_DASHBOARD_URL}/api/metrics", {
+            self._broadcast({
                 "type": "summary",
                 "agent": self._agent_name,
                 "data": summary,

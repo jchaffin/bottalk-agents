@@ -238,6 +238,13 @@ async def run_agent(
         limiter,
     ])
 
+    latency_obs = LatencyMetricsObserver(
+        agent_name=name,
+        session_id=session_id,
+        metrics_store=metrics_store,
+    )
+    latency_obs.set_transport(transport)
+
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
@@ -247,11 +254,7 @@ async def run_agent(
         ),
         observers=[
             MetricsLogObserver(),
-            LatencyMetricsObserver(
-                agent_name=name,
-                session_id=session_id,
-                metrics_store=metrics_store,
-            ),
+            latency_obs,
         ],
     )
     limiter.set_task(task)
