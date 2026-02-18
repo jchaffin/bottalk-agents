@@ -292,13 +292,27 @@ async def run_agent(
     # -- Event handlers --
     started = False
     agents = known_agents if known_agents else KNOWN_AGENTS
+    subscribed: set[str] = set()
 
-    def _is_other_agent(pname: str) -> bool:
-        return pname in agents and pname != name
+    def _matches_known_agent_name(display_name: str) -> bool:
+        """Best-effort match for Daily participant display names.
+
+        Daily's userName can include extra tokens (e.g. "Sarah (bot)"), so we
+        match any known agent name as a whole word (case-insensitive).
+        """
+        if not display_name:
+            return False
+        for n in agents:
+            if n and n != name and _name_in_text(n, display_name):
+                return True
+        return False
 
     async def _subscribe(pid: str):
+        if not pid or pid in subscribed:
+            return
         try:
             await transport.capture_participant_transcription(pid)
+            subscribed.add(pid)
             logger.info(f"[{name}] subscribed to transcription: {pid}")
         except Exception as e:
             logger.warning(f"[{name}] capture_transcription error: {e}")
@@ -326,11 +340,9 @@ async def run_agent(
             if pid in (my_id, "local"):
                 continue
             pname = info.get("info", {}).get("userName", pid)
-            if not _is_other_agent(pname):
-                continue
-            logger.info(f"[{name}] found agent: {pname}")
             await _subscribe(pid)
-            if goes_first and not started:
+            if goes_first and not started and _matches_known_agent_name(pname):
+                logger.info(f"[{name}] found agent: {pname}")
                 started = True
                 _kick(msgs, task, name)
 
@@ -342,11 +354,9 @@ async def run_agent(
             self_id.append(my_id)
 
         pname = p.get("info", {}).get("userName", "?")
-        if not _is_other_agent(pname):
-            return
         logger.info(f"[{name}] first_participant_joined: {pname}")
         await _subscribe(p["id"])
-        if goes_first and not started:
+        if goes_first and not started and _matches_known_agent_name(pname):
             started = True
             _kick(msgs, task, name)
 
@@ -354,11 +364,9 @@ async def run_agent(
     async def on_join(t, p):
         nonlocal started
         pname = p.get("info", {}).get("userName", "?")
-        if not _is_other_agent(pname):
-            return
         logger.info(f"[{name}] participant_joined: {pname}")
         await _subscribe(p["id"])
-        if goes_first and not started:
+        if goes_first and not started and _matches_known_agent_name(pname):
             started = True
             _kick(msgs, task, name)
 
@@ -366,7 +374,7 @@ async def run_agent(
     async def on_leave(t, p, reason):
         pname = p.get("info", {}).get("userName", "?")
         logger.info(f"[{name}] participant left: {pname} (reason={reason})")
-        if _is_other_agent(pname):
+        if _matches_known_agent_name(pname):
             logger.info(f"[{name}] other agent left — shutting down")
             await task.cancel()
 
