@@ -154,11 +154,10 @@ class LatencyMetricsObserver(BaseObserver):
 
     def _broadcast(self, data: dict):
         """Send metrics as a Daily app-message so the browser observer gets them."""
-        if self._transport:
-            import asyncio
+        if self._transport and hasattr(self._transport, "_client") and self._transport._client:
             msg = json.dumps({"label": "metrics", **data})
             try:
-                asyncio.ensure_future(self._transport.send_app_message(msg))
+                self._transport._client.send_app_message(msg, None)
             except Exception:
                 pass
         _post(f"{_DASHBOARD_URL}/api/metrics", data)
