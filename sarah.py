@@ -44,6 +44,14 @@ CONFIG = {
 }
 
 
+def get_voice_config() -> dict:
+    """Return VAD kwargs for run_agent()."""
+    return {
+        "allow_interruptions": True,
+        "vad_params": VADParams(threshold=0.6, min_volume=0.4, stop_secs=1.5),
+    }
+
+
 async def main(room_url: str, token: str):
     from agent import run_agent
 

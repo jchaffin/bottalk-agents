@@ -23,12 +23,17 @@ from loguru import logger
 from pipecat.runner.types import RunnerArguments
 
 from agent import run_agent
-from sarah import CONFIG as SARAH_CONFIG
-from mike import CONFIG as MIKE_CONFIG
+from sarah import CONFIG as SARAH_CONFIG, get_voice_config as sarah_voice_config
+from mike import CONFIG as MIKE_CONFIG, get_voice_config as mike_voice_config
 
 AGENT_CONFIGS = {
     "Sarah": SARAH_CONFIG,
     "Mike": MIKE_CONFIG,
+}
+
+VOICE_CONFIGS = {
+    "Sarah": sarah_voice_config,
+    "Mike": mike_voice_config,
 }
 
 # ---------------------------------------------------------------------------
@@ -155,7 +160,14 @@ async def bot(args: RunnerArguments):
         "goes_first": goes_first,
     })
 
-    logger.info(f"[{name}] starting session {session_id} in {room_url} (max_turns={max_turns})")
+    # Agent-specific VAD / SmartTurn config
+    voice_cfg_fn = VOICE_CONFIGS.get(name)
+    voice_kwargs = voice_cfg_fn() if voice_cfg_fn else {}
+
+    logger.info(
+        f"[{name}] starting session {session_id} in {room_url} "
+        f"(max_turns={max_turns}, voice_config={list(voice_kwargs.keys())})"
+    )
 
     await run_agent(
         room_url=room_url,
@@ -169,4 +181,5 @@ async def bot(args: RunnerArguments):
         session_id=session_id,
         metrics_store=_session_metrics,
         kpi_store=_session_kpis,
+        **voice_kwargs,
     )

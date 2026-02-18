@@ -49,6 +49,21 @@ CONFIG = {
 }
 
 
+def get_voice_config() -> dict:
+    """Return VAD/SmartTurn kwargs for run_agent()."""
+    smart_turn = LocalSmartTurnAnalyzerV3(
+        params=SmartTurnParams(stop_secs=3.0),
+    )
+    return {
+        "allow_interruptions": False,
+        "user_turn_stop_timeout": 1.5,
+        "vad_params": VADParams(threshold=0.6, min_volume=0.4, stop_secs=0.8),
+        "user_turn_strategies": UserTurnStrategies(
+            stop=[TurnAnalyzerUserTurnStopStrategy(turn_analyzer=smart_turn)],
+        ),
+    }
+
+
 async def main(room_url: str, token: str):
     from agent import run_agent
 
