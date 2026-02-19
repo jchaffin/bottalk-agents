@@ -291,8 +291,33 @@ async def run_agent(
 
     # -- Event handlers --
     started = False
+    kickoff_fallback_task: asyncio.Task | None = None
     agents = known_agents if known_agents else KNOWN_AGENTS
     subscribed: set[str] = set()
+
+    def _cancel_kickoff_fallback():
+        nonlocal kickoff_fallback_task
+        if kickoff_fallback_task and not kickoff_fallback_task.done():
+            kickoff_fallback_task.cancel()
+        kickoff_fallback_task = None
+
+    def _start_conversation(reason: str):
+        nonlocal started
+        if started:
+            return
+        started = True
+        _cancel_kickoff_fallback()
+        logger.info(f"[{name}] starting conversation ({reason})")
+        _kick(msgs, task, name)
+
+    async def _kickoff_fallback(delay_secs: float = 6.0):
+        await asyncio.sleep(delay_secs)
+        if goes_first and not started:
+            logger.warning(
+                f"[{name}] kickoff fallback triggered after {delay_secs:.1f}s; "
+                "starting without confirmed agent match"
+            )
+            _start_conversation("fallback-timeout")
 
     def _matches_known_agent_name(display_name: str) -> bool:
         """Best-effort match for Daily participant display names.
@@ -328,13 +353,16 @@ async def run_agent(
 
     @transport.event_handler("on_joined")
     async def on_joined(t, data):
-        nonlocal started
+        nonlocal kickoff_fallback_task
         my_id = _resolve_id(t, data)
         if my_id:
             self_id.clear()
             self_id.append(my_id)
             await _subscribe(my_id)
         logger.info(f"[{name}] joined (self_id={my_id or '(pending)'})")
+
+        if goes_first and not started and kickoff_fallback_task is None:
+            kickoff_fallback_task = asyncio.create_task(_kickoff_fallback())
 
         for pid, info in t.participants().items():
             if pid in (my_id, "local"):
@@ -343,12 +371,10 @@ async def run_agent(
             await _subscribe(pid)
             if goes_first and not started and _matches_known_agent_name(pname):
                 logger.info(f"[{name}] found agent: {pname}")
-                started = True
-                _kick(msgs, task, name)
+                _start_conversation("known-agent-detected:on_joined")
 
     @transport.event_handler("on_first_participant_joined")
     async def on_first(t, p):
-        nonlocal started
         my_id = _resolve_id(t)
         if my_id and not self_id:
             self_id.append(my_id)
@@ -357,18 +383,15 @@ async def run_agent(
         logger.info(f"[{name}] first_participant_joined: {pname}")
         await _subscribe(p["id"])
         if goes_first and not started and _matches_known_agent_name(pname):
-            started = True
-            _kick(msgs, task, name)
+            _start_conversation("known-agent-detected:on_first_participant_joined")
 
     @transport.event_handler("on_participant_joined")
     async def on_join(t, p):
-        nonlocal started
         pname = p.get("info", {}).get("userName", "?")
         logger.info(f"[{name}] participant_joined: {pname}")
         await _subscribe(p["id"])
         if goes_first and not started and _matches_known_agent_name(pname):
-            started = True
-            _kick(msgs, task, name)
+            _start_conversation("known-agent-detected:on_participant_joined")
         elif not _matches_known_agent_name(pname):
             # Non-agent participant (browser observer) joined late —
             # re-broadcast full metric history so it can catch up.
@@ -379,6 +402,7 @@ async def run_agent(
         pname = p.get("info", {}).get("userName", "?")
         logger.info(f"[{name}] participant left: {pname} (reason={reason})")
         if _matches_known_agent_name(pname):
+            _cancel_kickoff_fallback()
             logger.info(f"[{name}] other agent left — shutting down")
             await task.cancel()
 
