@@ -262,32 +262,7 @@ async def run_agent(
     )
     limiter.set_task(task)
 
-    # -- end_conversation tool (goes_first agent only) --
-    if goes_first:
-        end_fn = FunctionSchema(
-            name="end_conversation",
-            description=(
-                "Call ONLY after BOTH parties have explicitly said goodbye "
-                "and the conversation is completely finished. Never call "
-                "this during an active discussion. The conversation must "
-                "have had at least 10 exchanges before this can be called."
-            ),
-            properties={},
-            required=[],
-        )
-        ctx.set_tools(ToolsSchema(standard_tools=[end_fn]))
-
-        async def _handle_end_conversation(params):
-            logger.info(f"[{name}] end_conversation called — stopping session")
-            await params.result_callback({"status": "ending"})
-            await params.llm.push_frame(TTSSpeakFrame("Thank you for the conversation. Goodbye!"))
-            try:
-                await transport.stop_transcription()
-            except Exception:
-                pass
-            await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
-
-        llm.register_function("end_conversation", _handle_end_conversation)
+    # end_conversation tool removed — sessions run until max_turns.
 
     # -- Event handlers --
     started = False
