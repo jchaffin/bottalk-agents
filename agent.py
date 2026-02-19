@@ -267,10 +267,10 @@ async def run_agent(
         end_fn = FunctionSchema(
             name="end_conversation",
             description=(
-                "Call this when the conversation has reached a natural "
-                "conclusion — both parties have wrapped up, agreed on "
-                "next steps, or said goodbye. Do NOT call this while "
-                "the conversation is still ongoing."
+                "Call ONLY after BOTH parties have explicitly said goodbye "
+                "and the conversation is completely finished. Never call "
+                "this during an active discussion. The conversation must "
+                "have had at least 10 exchanges before this can be called."
             ),
             properties={},
             required=[],
