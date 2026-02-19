@@ -292,6 +292,7 @@ async def run_agent(
     # -- Event handlers --
     started = False
     kickoff_fallback_task: asyncio.Task | None = None
+    shutdown_task: asyncio.Task | None = None
     agents = known_agents if known_agents else KNOWN_AGENTS
     subscribed: set[str] = set()
 
@@ -385,26 +386,55 @@ async def run_agent(
         if goes_first and not started and _matches_known_agent_name(pname):
             _start_conversation("known-agent-detected:on_first_participant_joined")
 
+    def _cancel_shutdown():
+        nonlocal shutdown_task
+        if shutdown_task and not shutdown_task.done():
+            shutdown_task.cancel()
+        shutdown_task = None
+
     @transport.event_handler("on_participant_joined")
     async def on_join(t, p):
         pname = p.get("info", {}).get("userName", "?")
         logger.info(f"[{name}] participant_joined: {pname}")
         await _subscribe(p["id"])
-        if goes_first and not started and _matches_known_agent_name(pname):
-            _start_conversation("known-agent-detected:on_participant_joined")
-        elif not _matches_known_agent_name(pname):
-            # Non-agent participant (browser observer) joined late —
-            # re-broadcast full metric history so it can catch up.
+        if _matches_known_agent_name(pname):
+            if shutdown_task and not shutdown_task.done():
+                _cancel_shutdown()
+                logger.info(f"[{name}] cancelled pending shutdown — {pname} rejoined")
+            if goes_first and not started:
+                _start_conversation("known-agent-detected:on_participant_joined")
+        else:
             latency_obs.broadcast_history()
 
     @transport.event_handler("on_participant_left")
     async def on_leave(t, p, reason):
+        nonlocal shutdown_task
         pname = p.get("info", {}).get("userName", "?")
         logger.info(f"[{name}] participant left: {pname} (reason={reason})")
-        if _matches_known_agent_name(pname):
+        if not _matches_known_agent_name(pname):
+            return
+        if shutdown_task and not shutdown_task.done():
+            return
+
+        async def _delayed_shutdown(grace_secs: float = 8.0):
+            """Wait before shutting down — the other agent may reconnect."""
+            logger.info(
+                f"[{name}] other agent ({pname}) left — "
+                f"waiting {grace_secs}s for reconnect"
+            )
+            await asyncio.sleep(grace_secs)
+            for pid, info in t.participants().items():
+                if pid == "local" or (self_id and pid == self_id[0]):
+                    continue
+                peer = info.get("info", {}).get("userName", "")
+                if _matches_known_agent_name(peer):
+                    logger.info(f"[{name}] {peer} reconnected — staying alive")
+                    return
             _cancel_kickoff_fallback()
-            logger.info(f"[{name}] other agent left — shutting down")
+            logger.info(f"[{name}] other agent did not rejoin — shutting down")
             await task.cancel()
+
+        shutdown_task = asyncio.create_task(_delayed_shutdown())
 
     # -- Run --
     runner = PipelineRunner()
