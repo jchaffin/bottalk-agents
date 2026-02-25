@@ -21,7 +21,12 @@ import urllib.request
 from pathlib import Path
 
 import tomllib
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*_args: object, **_kwargs: object) -> bool:
+        return False  # Optional; CI provides env vars directly
 
 
 PCC_API = "https://api.pipecat.daily.co/v1"
