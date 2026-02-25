@@ -7,7 +7,6 @@ on:
 env:
   AGENT_NAME: bottalk-agent
   IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
-  PCC_API: https://api.pipecat.daily.co/v1
 
 jobs:
   deploy:
@@ -42,39 +41,7 @@ jobs:
 
       - name: Deploy to Pipecat Cloud
         env:
-          AUTH: "Authorization: Bearer ${{ secrets.PCC_PRIVATE_KEY }}"
+          PCC_PRIVATE_KEY: ${{ secrets.PCC_PRIVATE_KEY }}
+          PCC_DEPLOY_IMAGE: ${{ env.IMAGE }}
         run: |
-          BODY='{
-            "image": "'"$IMAGE"'",
-            "nodeType": "arm",
-            "imagePullSecretSet": "ghcr-credentials",
-            "secretSet": "bottalk-secrets",
-            "agentProfile": "agent-1x",
-            "autoScaling": { "minAgents": 0, "maxAgents": 10 }
-          }'
-
-          # Try update first (agent already exists).
-          CODE=$(curl -s -o /tmp/pcc.json -w "%{http_code}" \
-            -X POST "$PCC_API/agents/$AGENT_NAME" \
-            -H "$AUTH" -H "Content-Type: application/json" -d "$BODY")
-
-          # If agent doesn't exist (404), create it.
-          if [ "$CODE" = "404" ]; then
-            CREATE_BODY='{
-              "serviceName": "'"$AGENT_NAME"'",
-              "image": "'"$IMAGE"'",
-              "region": "us-west",
-              "nodeType": "arm",
-              "imagePullSecretSet": "ghcr-credentials",
-              "secretSet": "bottalk-secrets",
-              "agentProfile": "agent-1x",
-              "autoScaling": { "minAgents": 0, "maxAgents": 10 }
-            }'
-            CODE=$(curl -s -o /tmp/pcc.json -w "%{http_code}" \
-              -X POST "$PCC_API/agents" \
-              -H "$AUTH" -H "Content-Type: application/json" -d "$CREATE_BODY")
-          fi
-
-          cat /tmp/pcc.json && echo ""
-          [ "$CODE" = "200" ] || [ "$CODE" = "201" ] || { echo "Deploy failed ($CODE)"; exit 1; }
-          echo "Deployed ($CODE)"
+          python deploy.py --image "$PCC_DEPLOY_IMAGE"

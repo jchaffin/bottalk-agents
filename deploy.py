@@ -60,25 +60,32 @@ def pcc_request(method: str, url: str, api_key: str, body: dict | None = None) -
         return e.code, payload
 
 
-def build_update_body(cfg: dict) -> dict:
+def build_update_body(cfg: dict, image_override: str | None = None) -> dict:
     scaling = cfg.get("scaling", {}) or {}
-    body = {
-        "image": cfg["image"],
-        "imagePullSecretSet": cfg["image_credentials"],
-        "secretSet": cfg["secret_set"],
-        "agentProfile": cfg["agent_profile"],
+    image = image_override or cfg.get("image", "")
+    body: dict = {
+        "image": image,
+        "imagePullSecretSet": cfg.get("image_credentials", ""),
+        "secretSet": cfg.get("secret_set", ""),
+        "agentProfile": cfg.get("agent_profile", "agent-1x"),
+        "nodeType": cfg.get("node_type", "arm"),
         "autoScaling": {
             "minAgents": int(scaling.get("min_agents", 0)),
             "maxAgents": int(scaling.get("max_agents", 10)),
         },
     }
+    # Optional Krisp VIVA noise cancellation
+    if "krisp_viva" in cfg and cfg["krisp_viva"]:
+        krisp = cfg["krisp_viva"]
+        if isinstance(krisp, dict) and krisp.get("audio_filter"):
+            body["krispViva"] = {"audioFilter": krisp["audio_filter"]}
     return body
 
 
-def build_create_body(cfg: dict, service_name: str) -> dict:
-    body = build_update_body(cfg)
+def build_create_body(cfg: dict, service_name: str, image_override: str | None = None) -> dict:
+    body = build_update_body(cfg, image_override=image_override)
     body["serviceName"] = service_name
-    body["region"] = cfg["region"]
+    body["region"] = cfg.get("region", "us-west")
     return body
 
 
@@ -95,6 +102,7 @@ def main() -> int:
         default="pcc-deploy.toml",
         help="Path to deploy TOML config (default: pcc-deploy.toml)",
     )
+    parser.add_argument("--image", default="", help="Override image URL (e.g. for CI builds)")
     args = parser.parse_args()
 
     load_env()
@@ -117,12 +125,13 @@ def main() -> int:
         or str(cfg.get("agent_name", DEFAULT_AGENT_NAME))
     )
 
-    update_body = build_update_body(cfg)
+    image_override = args.image or os.getenv("PCC_DEPLOY_IMAGE", "") or None
+    update_body = build_update_body(cfg, image_override=image_override)
     update_url = f"{PCC_API}/agents/{agent_name}"
     code, payload = pcc_request("POST", update_url, api_key, update_body)
 
     if code == 404:
-        create_body = build_create_body(cfg, agent_name)
+        create_body = build_create_body(cfg, agent_name, image_override=image_override)
         create_url = f"{PCC_API}/agents"
         code, payload = pcc_request("POST", create_url, api_key, create_body)
 

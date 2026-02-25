@@ -1,10 +1,26 @@
+# Pipecat Cloud deployment config
+# Docs: https://docs.pipecat.ai/deployment/pipecat-cloud/cli-reference/deploy
+
 agent_name = "bottalk-agent"
 image = "ghcr.io/jchaffin/bottalk-agents:latest"
-image_credentials = "ghcr-credentials"
-secret_set = "bottalk-secrets"
-agent_profile = "agent-1x"
 region = "us-west"
+node_type = "arm"
+
+# Secrets (must exist in Pipecat Cloud Dashboard, same region as agent)
+secret_set = "bottalk-secrets"
+image_credentials = "ghcr-credentials"
+
+# Resource allocation (agent-1x = 0.5 vCPU, 1GB RAM)
+agent_profile = "agent-1x"
+
+# Optional: enable managed API keys for this agent
+# enable_managed_keys = false
 
 [scaling]
-min_agents = 1
+# 0 = scale to zero when idle (cold starts); 1+ = always warm
+min_agents = 0
 max_agents = 10
+
+# Optional: Krisp VIVA noise cancellation for telephony
+# [krisp_viva]
+# audio_filter = "tel"
