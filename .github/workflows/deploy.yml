@@ -38,6 +38,8 @@ jobs:
           tags: |
             ${{ env.IMAGE }}
             ghcr.io/${{ github.repository }}:latest
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
 
       - name: Deploy to Pipecat Cloud
         env:
