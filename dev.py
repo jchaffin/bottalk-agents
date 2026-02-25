@@ -120,9 +120,11 @@ async def start(request: Request):
         room = await helper.create_room(
             DailyRoomParams(properties=DailyRoomProperties(exp=time.time() + 600))
         )
-        t1 = await helper.get_token(room.url)
-        t2 = await helper.get_token(room.url)
-        t_browser = await helper.get_token(room.url)
+        t1, t2, t_browser = await asyncio.gather(
+            helper.get_token(room.url),
+            helper.get_token(room.url),
+            helper.get_token(room.url),
+        )
 
     room_url = room.url
     py = sys.executable

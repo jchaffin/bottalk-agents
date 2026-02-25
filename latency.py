@@ -11,6 +11,7 @@ import json
 import os
 import threading
 import time
+import uuid
 import urllib.request
 from collections import defaultdict
 from statistics import mean, median
@@ -187,12 +188,13 @@ class LatencyMetricsObserver(BaseObserver):
         the payload to the browser (CallProvider) for live display. Metrics
         are persisted when the transcript is saved.
         """
+        payload = {**data, "label": "metrics", "id": str(uuid.uuid4())}
         self._event_history.append(data)
         if self._room_name and _DAILY_API_KEY:
             url = f"https://api.daily.co/v1/rooms/{self._room_name}/send-app-message"
             _post(
                 url,
-                {"data": {**data, "label": "metrics"}, "recipient": "*"},
+                {"data": payload, "recipient": "*"},
                 headers={"Authorization": f"Bearer {_DAILY_API_KEY}"},
                 retries=2,
             )
@@ -205,7 +207,7 @@ class LatencyMetricsObserver(BaseObserver):
         for data in self._event_history:
             _post(
                 url,
-                {"data": {**data, "label": "metrics", "replay": True}, "recipient": "*"},
+                {"data": {**data, "label": "metrics", "id": str(uuid.uuid4()), "replay": True}, "recipient": "*"},
                 headers={"Authorization": f"Bearer {_DAILY_API_KEY}"},
                 retries=1,
             )

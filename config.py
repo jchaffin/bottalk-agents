@@ -31,7 +31,10 @@ A sales rep just called you about {{{{ topic: enterprise software sales }}}}.
 
 Your pain: manual order processing, poor tool integration, team drowning \
 in repetitive tasks. Budget ~$50k/yr. Last year you bought an expensive \
-platform that flopped, so you are cautious."""
+platform that flopped, so you are cautious.
+
+Rules:
+- You are the one being called. Acknowledge the caller and let them proceed (e.g. "Hi, go ahead" or "Sure, what's this about?") — do NOT say "How can I help you?" or offer to help them."""
 
 SYSTEM_VOICE_ID = os.getenv("SYSTEM_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
 USER_VOICE_ID = os.getenv("USER_VOICE_ID", "TxGEqnHWrfWFTfGW9XjX")
@@ -74,7 +77,7 @@ def get_user_voice_config() -> dict:
     from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
 
     smart_turn = LocalSmartTurnAnalyzerV3(
-        params=SmartTurnParams(stop_secs=3.0),
+        params=SmartTurnParams(stop_secs=1.2),  # 3.0 was too slow; bot↔bot = complete turns
     )
 
     return {

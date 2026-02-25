@@ -54,7 +54,6 @@ from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
 
-
 KNOWN_AGENTS = {"System", "User"}
 
 
@@ -229,7 +228,7 @@ async def run_agent(
     user_params = LLMUserAggregatorParams(
         user_turn_strategies=user_turn_strategies or UserTurnStrategies(),
         user_turn_stop_timeout=user_turn_stop_timeout,
-        filter_incomplete_user_turns=True,
+        filter_incomplete_user_turns=False,  # Bot↔bot = complete turns; avoid 5–10s ○/◐ waits
     )
     user_agg, asst_agg = LLMContextAggregatorPair(ctx, user_params=user_params)
 
@@ -269,6 +268,7 @@ async def run_agent(
             enable_usage_metrics=True,
             allow_interruptions=allow_interruptions,
         ),
+        enable_rtvi=False,  # We use "metrics" app-messages via LatencyMetricsObserver; RTVI not needed
         observers=[
             MetricsLogObserver(),
             latency_obs,
