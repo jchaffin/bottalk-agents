@@ -5,7 +5,7 @@ on:
     branches: [master]
 
 env:
-  AGENT_NAME: outrival-agent
+  AGENT_NAME: bottalk-agent
   IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
   PCC_API: https://api.pipecat.daily.co/v1
 
@@ -48,7 +48,7 @@ jobs:
             "image": "'"$IMAGE"'",
             "nodeType": "arm",
             "imagePullSecretSet": "ghcr-credentials",
-            "secretSet": "outrival-secrets",
+            "secretSet": "bottalk-secrets",
             "agentProfile": "agent-1x",
             "autoScaling": { "minAgents": 0, "maxAgents": 10 }
           }'
@@ -66,7 +66,7 @@ jobs:
               "region": "us-west",
               "nodeType": "arm",
               "imagePullSecretSet": "ghcr-credentials",
-              "secretSet": "outrival-secrets",
+              "secretSet": "bottalk-secrets",
               "agentProfile": "agent-1x",
               "autoScaling": { "minAgents": 0, "maxAgents": 10 }
             }'

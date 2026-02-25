@@ -1,7 +1,7 @@
-agent_name = "outrival-agent"
-image = "ghcr.io/jchaffin/outrival-agents:latest"
+agent_name = "bottalk-agent"
+image = "ghcr.io/jchaffin/bottalk-agents:latest"
 image_credentials = "ghcr-credentials"
-secret_set = "outrival-secrets"
+secret_set = "bottalk-secrets"
 agent_profile = "agent-1x"
 region = "us-west"
 

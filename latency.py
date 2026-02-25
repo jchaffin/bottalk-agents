@@ -3,8 +3,8 @@
 Collects per-turn TTFB, processing time, user->bot response latency,
 and per-turn transcription (what was heard + what the bot replied).
 
-Prints an aggregated summary at session end and pushes every event to
-the dashboard server (default http://localhost:8765) for live display.
+Broadcasts events via Daily app-messages to the browser. Appends to
+metrics_store for bot.py /metrics. Logs aggregate summary at session end.
 """
 
 import json
@@ -20,6 +20,7 @@ from loguru import logger
 
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
+    BotStoppedSpeakingFrame,
     CancelFrame,
     EndFrame,
     LLMFullResponseEndFrame,
@@ -38,8 +39,8 @@ from pipecat.metrics.metrics import (
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 from pipecat.processors.frame_processor import FrameDirection
 
-_DASHBOARD_URL = os.getenv("DASHBOARD_URL", "http://localhost:8000")
-_METRICS_URL = os.getenv("METRICS_URL", "")
+# Optional: POST per-turn records to e.g. https://yourapp.com/api/metrics for SessionMetric DB.
+_METRICS_INGEST_URL = os.getenv("METRICS_INGEST_URL", "")
 _DAILY_API_KEY = os.getenv("DAILY_API_KEY", "")
 
 
@@ -145,7 +146,7 @@ class LatencyMetricsObserver(BaseObserver):
         self._agent_name = agent_name
         self._session_id = session_id or f"{agent_name}-{int(time.time())}"
         self._metrics_store = metrics_store
-        self._metrics_url = metrics_url or _METRICS_URL
+        self._metrics_ingest_url = metrics_url or _METRICS_INGEST_URL
         self._room_name = room_name
         self._seen_frames: set[str] = set()
         self._event_history: list[dict] = []
@@ -175,15 +176,18 @@ class LatencyMetricsObserver(BaseObserver):
         self._pending_llm: float | None = None
         self._pending_tts: float | None = None
 
+        # Interruption tracking
+        self._bot_speaking: bool = False
+        self._interruption_count: int = 0
+
     def _broadcast(self, data: dict):
-        """Post metrics to the dashboard and broadcast as a Daily app-message.
+        """Broadcast metrics via Daily app-message to all room participants.
 
         The Daily REST API ``POST /rooms/:name/send-app-message`` delivers
-        the payload to all room participants (including the browser observer)
-        without touching the Pipecat pipeline or Daily SDK event loop.
+        the payload to the browser (CallProvider) for live display. Metrics
+        are persisted when the transcript is saved.
         """
         self._event_history.append(data)
-        _post(f"{_DASHBOARD_URL}/api/metrics", data)
         if self._room_name and _DAILY_API_KEY:
             url = f"https://api.daily.co/v1/rooms/{self._room_name}/send-app-message"
             _post(
@@ -252,28 +256,51 @@ class LatencyMetricsObserver(BaseObserver):
             self._emit_turn()
             return
 
-        # --- user -> bot latency ---
+        # --- bot speaking state ---
+        if isinstance(frame, BotStartedSpeakingFrame):
+            self._bot_speaking = True
+            if self._user_stopped_at:
+                latency = time.time() - self._user_stopped_at
+                self._user_stopped_at = 0.0
+                self._e2e_latencies.append(latency)
+                self._last_e2e = latency
+                tag = f"[{self._agent_name}] " if self._agent_name else ""
+                logger.info(f"{tag}user->bot latency: {_fmt(latency)}")
+                self._broadcast({
+                    "type": "e2e",
+                    "agent": self._agent_name,
+                    "value": latency,
+                    "ts": time.time(),
+                })
+            return
+
+        if isinstance(frame, BotStoppedSpeakingFrame):
+            self._bot_speaking = False
+            return
+
+        # --- user -> bot latency + interruption detection ---
         if isinstance(frame, VADUserStartedSpeakingFrame):
+            if self._bot_speaking:
+                self._interruption_count += 1
+                tag = f"[{self._agent_name}] " if self._agent_name else ""
+                logger.info(
+                    f"{tag}INTERRUPTION #{self._interruption_count} — "
+                    f"user started speaking while bot was talking"
+                )
+                self._broadcast({
+                    "type": "interruption",
+                    "agent": self._agent_name,
+                    "count": self._interruption_count,
+                    "ts": time.time(),
+                })
             self._user_stopped_at = 0.0
+            return
 
-        elif isinstance(frame, VADUserStoppedSpeakingFrame):
+        if isinstance(frame, VADUserStoppedSpeakingFrame):
             self._user_stopped_at = time.time()
+            return
 
-        elif isinstance(frame, BotStartedSpeakingFrame) and self._user_stopped_at:
-            latency = time.time() - self._user_stopped_at
-            self._user_stopped_at = 0.0
-            self._e2e_latencies.append(latency)
-            self._last_e2e = latency
-            tag = f"[{self._agent_name}] " if self._agent_name else ""
-            logger.info(f"{tag}user->bot latency: {_fmt(latency)}")
-            self._broadcast({
-                "type": "e2e",
-                "agent": self._agent_name,
-                "value": latency,
-                "ts": time.time(),
-            })
-
-        elif isinstance(frame, (EndFrame, CancelFrame)):
+        if isinstance(frame, (EndFrame, CancelFrame)):
             self._log_summary()
 
     # ------------------------------------------------------------------
@@ -329,8 +356,8 @@ class LatencyMetricsObserver(BaseObserver):
 
         if self._metrics_store is not None:
             self._metrics_store.append(record)
-        if self._metrics_url:
-            _post(self._metrics_url, record)
+        if self._metrics_ingest_url:
+            _post(self._metrics_ingest_url, record)
 
         # Reset per-turn state
         self._current_input_chunks = []
