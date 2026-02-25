@@ -1,3 +1,5 @@
+# Copyright 2026 Jacob Chaffin / Outrival. All rights reserved.
+
 """
 Reusable Pipecat voice agent that joins a Daily room.
 
@@ -7,17 +9,16 @@ Daily's room-level Deepgram transcription broadcasts every participant's
 speech to ALL participants.  Without filtering, each bot "hears" its own
 TTS output echoed back as user input — infinite feedback loop.
 
-A ``TranscriptionFilter`` FrameProcessor sits in the pipeline between
-``transport.input()`` and the user aggregator.  It drops any
-``TranscriptionFrame`` / ``InterimTranscriptionFrame`` whose ``user_id``
-matches this bot's participant ID.  When ``name_filter=True``, it
-additionally requires the bot's name to appear as a whole word in the
-transcription text.
+We patch the transport's transcription callback to silently drop any
+transcription whose ``participantId`` matches this bot.  When
+``name_filter=True``, we additionally require the bot's name to appear
+as a whole word in the transcription text.
 """
 
 import asyncio
 import os
 import re
+from typing import Any
 
 from loguru import logger
 
@@ -28,10 +29,11 @@ from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
     EndTaskFrame,
     Frame,
-    InterimTranscriptionFrame,
     LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
     LLMRunFrame,
-    TranscriptionFrame,
+    LLMTextFrame,
+    OutputTransportMessageUrgentFrame,
     TTSSpeakFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
@@ -42,70 +44,30 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.processors.frameworks.rtvi import RTVIObserverParams
 from pipecat.observers.loggers.metrics_log_observer import MetricsLogObserver
+<<<<<<< Updated upstream
+||||||| Stash base
 
 from latency import LatencyMetricsObserver
+=======
+from pipecat.processors.frameworks.rtvi import RTVIObserver, RTVIProcessor
+
+from latency import LatencyMetricsObserver
+from rtvi_events import AgentTranscriptRTVIObserver
+>>>>>>> Stashed changes
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
 
-
-KNOWN_AGENTS = {"Sarah", "Mike"}
+# Must match APP_MESSAGE_LABEL in frontend/src/lib/config.ts
+APP_MESSAGE_LABEL = "outrival"
 
 
 # ---------------------------------------------------------------------------
 # Pipeline processors
 # ---------------------------------------------------------------------------
-
-class TranscriptionFilter(FrameProcessor):
-    """Drop transcription frames that came from this bot (self-echo) or
-    that don't mention this bot's name (when *name_filter* is enabled).
-
-    Works at the pipeline level — no monkey-patching of transport internals.
-    """
-
-    def __init__(
-        self,
-        *,
-        name: str,
-        self_id: list[str],
-        name_filter: bool = False,
-    ):
-        super().__init__()
-        self._name = name
-        self._self_id = self_id
-        self._name_filter = name_filter
-
-    async def process_frame(self, frame: Frame, direction: FrameDirection):
-        await super().process_frame(frame, direction)
-
-        if isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)):
-            sender = frame.user_id
-            text = frame.text
-            is_final = isinstance(frame, TranscriptionFrame)
-
-            if is_final:
-                logger.debug(
-                    f"[{self._name}] transcript: sender={sender}, "
-                    f"self={self._self_id}, text={text[:60]}"
-                )
-
-            # Drop our own speech echoed back via Deepgram.
-            if self._self_id and sender == self._self_id[0]:
-                return
-
-            # Optionally require the bot's name to appear in the text.
-            if self._name_filter and not _name_in_text(self._name, text):
-                if is_final:
-                    logger.debug(
-                        f"[{self._name}] dropping (not addressed): {text[:60]}"
-                    )
-                return
-
-        await self.push_frame(frame, direction)
-
 
 class ConversationLimiter(FrameProcessor):
     """Hard-stop after *max_turns* LLM responses to prevent runaway usage."""
@@ -131,6 +93,76 @@ class ConversationLimiter(FrameProcessor):
         await self.push_frame(frame, direction)
 
 
+class ContextTrimmer(FrameProcessor):
+    """Sliding-window trim on the LLM message list.
+
+    Keeps the system prompt(s) and the last *max_turns* exchanges.
+    Without trimming, TTFT grows linearly and the transcript visibly
+    lags behind TTS audio after ~10 turns.
+    """
+
+    def __init__(self, messages: list, *, max_turns: int = 10):
+        super().__init__()
+        self._messages = messages
+        self._max_turns = max_turns
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, LLMFullResponseEndFrame):
+            self._trim()
+        await self.push_frame(frame, direction)
+
+    def _trim(self):
+        limit = self._max_turns * 2
+        n_sys = sum(1 for m in self._messages if m.get("role") == "system")
+        n_convo = len(self._messages) - n_sys
+        if n_convo > limit:
+            drop = n_convo - limit
+            del self._messages[n_sys : n_sys + drop]
+            logger.debug(f"Trimmed {drop} msgs, kept {n_sys} sys + {n_convo - drop} convo")
+
+
+class LLMTextRelay(FrameProcessor):
+    """Batch LLM tokens into chunked ``bot-llm-text`` app-messages.
+
+    Flushing every ~100 chars keeps the Daily signaling channel at
+    2-3 msgs/sec instead of 50, preventing transcript lag.
+    """
+
+    _FLUSH_CHARS = 100
+
+    def __init__(self):
+        super().__init__()
+        self._buffer = ""
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._buffer = ""
+            await self._send({"label": APP_MESSAGE_LABEL, "type": "bot-llm-started"})
+        elif isinstance(frame, LLMTextFrame):
+            self._buffer += frame.text
+            if len(self._buffer) >= self._FLUSH_CHARS:
+                await self._flush()
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            await self._flush()
+            await self._send({"label": APP_MESSAGE_LABEL, "type": "bot-llm-stopped"})
+
+        await self.push_frame(frame, direction)
+
+    async def _flush(self):
+        if self._buffer:
+            text, self._buffer = self._buffer, ""
+            await self._send({
+                "label": APP_MESSAGE_LABEL,
+                "type": "bot-llm-text",
+                "data": {"text": text},
+            })
+
+    async def _send(self, message: dict):
+        await self.push_frame(OutputTransportMessageUrgentFrame(message=message))
+
 
 # ---------------------------------------------------------------------------
 # Transport patches
@@ -141,20 +173,66 @@ def _name_in_text(name: str, text: str) -> bool:
     return bool(re.search(r"\b" + re.escape(name) + r"\b", text, re.IGNORECASE))
 
 
+def _patch_app_message_filter(transport: DailyTransport):
+    """Drop incoming app-messages with our label before RTVI validation.
+
+    Without this, our custom messages fail RTVI validation and flood
+    the event loop with errors, choking the pipeline.
+    """
+    orig = transport._client.on_app_message
+
+    def filtered(message, sender):
+        if isinstance(message, dict) and message.get("label") == APP_MESSAGE_LABEL:
+            return
+        orig(message, sender)
+
+    transport._client.on_app_message = filtered
+
+
+def _patch_transcription_filter(
+    transport: DailyTransport, name: str, name_filter: bool,
+) -> list[str]:
+    """Filter self-transcription (and optionally non-addressed speech).
+
+    Returns a mutable list for storing this bot's participant ID.
+    """
+    self_id: list[str] = []
+    orig = transport._client.on_transcription_message
+
+    def filtered(message):
+        sender = message.get("participantId", "")
+        is_final = message.get("rawResponse", {}).get("is_final", False)
+        text = message.get("text", "")
+
+        if is_final:
+            logger.debug(f"[{name}] transcript: sender={sender}, self={self_id}, text={text[:60]}")
+
+        # Drop self-echo.
+        if self_id and sender == self_id[0]:
+            return
+
+        # Optional name gate.
+        if name_filter and not _name_in_text(name, text):
+            if is_final:
+                logger.debug(f"[{name}] dropping (not addressed): {text[:60]}")
+            return
+
+        orig(message)
+
+    transport._client.on_transcription_message = filtered
+    return self_id
+
+
 def _noop_start_transcription(transport: DailyTransport):
     """Prevent the second agent from calling start_transcription.
 
     Only one participant may start it; the second attempt raises
     UserMustBeAdmin.  The second agent still receives transcription
     events once the first agent starts it.
-
-    We patch the *DailyTransport* method directly (not the internal
-    ``_client``) so the override is guaranteed to be hit by Pipecat's
-    join handler.
     """
     async def _noop(*a, **kw):
         return None
-    transport.start_transcription = _noop  # type: ignore[assignment]
+    transport._client.start_transcription = _noop
 
 
 # ---------------------------------------------------------------------------
@@ -172,105 +250,113 @@ async def run_agent(
     name_filter: bool = False,
     known_agents: set[str] | None = None,
     max_turns: int = 20,
-    allow_interruptions: bool = False,
-    user_turn_strategies: UserTurnStrategies | None = None,
-    user_turn_stop_timeout: float = 5.0,
-    vad_params: VADParams | None = None,
-    llm_model: str = "gpt-4o-mini",
-    session_id: str = "",
-    metrics_store: list | None = None,
-    kpi_store: dict | None = None,
 ):
     """Join *room_url* as *name* and run an LLM voice pipeline."""
 
-    if vad_params is None:
-        vad_params = VADParams(threshold=0.6, min_volume=0.4, stop_secs=0.2)
-
-    # -- Transport --
+    # -- Transport (audio-only, auto-subscribe) --
     transport = DailyTransport(
         room_url, token, name,
         DailyParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
             transcription_enabled=True,
-            vad_analyzer=SileroVADAnalyzer(params=vad_params),
         ),
     )
     if not goes_first:
         _noop_start_transcription(transport)
+    _patch_app_message_filter(transport)
 
     # -- Services --
-    llm = OpenAILLMService(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        model=llm_model,
-        params=OpenAILLMService.InputParams(
-            max_completion_tokens=200,
-            temperature=0.7,
-        ),
-    )
+    llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-4o-mini")
     tts = ElevenLabsTTSService(api_key=os.getenv("ELEVENLABS_API_KEY"), voice_id=voice_id)
 
     # -- Context & aggregators --
     msgs = [{"role": "system", "content": system_prompt}]
     ctx = LLMContext(msgs)
-    user_params = LLMUserAggregatorParams(
-        user_turn_strategies=user_turn_strategies or UserTurnStrategies(),
-        user_turn_stop_timeout=user_turn_stop_timeout,
+    user_agg, asst_agg = LLMContextAggregatorPair(
+        ctx,
+        user_params=LLMUserAggregatorParams(
+            # 2 s silence threshold — prevents false triggers in bot-to-bot rooms
+            # where TTS pauses ~1 s between sentences.
+            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=2.0)),
+        ),
     )
-    user_agg, asst_agg = LLMContextAggregatorPair(ctx, user_params=user_params)
 
     # -- Processors --
-    self_id: list[str] = []
-    tx_filter = TranscriptionFilter(
-        name=name, self_id=self_id, name_filter=name_filter,
-    )
+    trimmer = ContextTrimmer(msgs, max_turns=10)
     limiter = ConversationLimiter(max_turns=max_turns)
+    rtvi = RTVIProcessor(transport=transport)
 
     # -- Pipeline --
     pipeline = Pipeline([
         transport.input(),
+<<<<<<< Updated upstream
+||||||| Stash base
         tx_filter,
+=======
+        rtvi,
+        tx_filter,
+>>>>>>> Stashed changes
         user_agg,
         llm,
+        LLMTextRelay(),
         tts,
         transport.output(),
         asst_agg,
+        trimmer,
         limiter,
     ])
-
-    # Extract room name from URL for Daily REST API app-message broadcast
-    room_name = room_url.rstrip("/").rsplit("/", 1)[-1] if room_url else ""
-
-    latency_obs = LatencyMetricsObserver(
-        agent_name=name,
-        session_id=session_id,
-        metrics_store=metrics_store,
-        room_name=room_name,
-    )
 
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
             enable_metrics=True,
             enable_usage_metrics=True,
-            allow_interruptions=allow_interruptions,
+            allow_interruptions=False,
         ),
+        observers=[MetricsLogObserver()],
+        rtvi_observer_params=RTVIObserverParams(
+            bot_llm_enabled=False,
+            bot_tts_enabled=False,
+            bot_output_enabled=False,
+            bot_speaking_enabled=False,
+            user_llm_enabled=False,
+            user_speaking_enabled=False,
+            user_transcription_enabled=False,
+            metrics_enabled=False,
+        ),
+<<<<<<< Updated upstream
+||||||| Stash base
         observers=[
             MetricsLogObserver(),
             latency_obs,
         ],
+=======
+        observers=[
+            MetricsLogObserver(),
+            RTVIObserver(rtvi=rtvi),
+            AgentTranscriptRTVIObserver(rtvi=rtvi, agent_name=name),
+            latency_obs,
+        ],
+>>>>>>> Stashed changes
     )
     limiter.set_task(task)
+
+    @rtvi.event_handler("on_client_ready")
+    async def _on_client_ready(rtvi_proc):
+        await rtvi_proc.set_bot_ready(
+            about={"library": "outrival-agent", "agent_name": name}
+        )
 
     # -- end_conversation tool (goes_first agent only) --
     if goes_first:
         end_fn = FunctionSchema(
             name="end_conversation",
             description=(
-                "Call ONLY after BOTH parties have explicitly said goodbye "
-                "and the conversation is completely finished. Never call "
-                "this during an active discussion. The conversation must "
-                "have had at least 10 exchanges before this can be called."
+                "Call this when the conversation has reached a natural "
+                "conclusion — both parties have wrapped up, agreed on "
+                "next steps, or said goodbye. Do NOT call this while "
+                "the conversation is still ongoing."
             ),
             properties={},
             required=[],
@@ -281,64 +367,23 @@ async def run_agent(
             logger.info(f"[{name}] end_conversation called — stopping session")
             await params.result_callback({"status": "ending"})
             await params.llm.push_frame(TTSSpeakFrame("Thank you for the conversation. Goodbye!"))
-            try:
-                await transport.stop_transcription()
-            except Exception:
-                pass
             await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
 
         llm.register_function("end_conversation", _handle_end_conversation)
 
+    # -- Transcription filter --
+    self_id = _patch_transcription_filter(transport, name, name_filter)
+
     # -- Event handlers --
     started = False
-    kickoff_fallback_task: asyncio.Task | None = None
-    shutdown_task: asyncio.Task | None = None
-    agents = known_agents if known_agents else KNOWN_AGENTS
-    subscribed: set[str] = set()
+    agents = known_agents if known_agents else {name}
 
-    def _cancel_kickoff_fallback():
-        nonlocal kickoff_fallback_task
-        if kickoff_fallback_task and not kickoff_fallback_task.done():
-            kickoff_fallback_task.cancel()
-        kickoff_fallback_task = None
-
-    def _start_conversation(reason: str):
-        nonlocal started
-        if started:
-            return
-        started = True
-        _cancel_kickoff_fallback()
-        logger.info(f"[{name}] starting conversation ({reason})")
-        _kick(msgs, task, name)
-
-    async def _kickoff_fallback(delay_secs: float = 6.0):
-        await asyncio.sleep(delay_secs)
-        if goes_first and not started:
-            logger.warning(
-                f"[{name}] kickoff fallback triggered after {delay_secs:.1f}s; "
-                "starting without confirmed agent match"
-            )
-            _start_conversation("fallback-timeout")
-
-    def _matches_known_agent_name(display_name: str) -> bool:
-        """Best-effort match for Daily participant display names.
-
-        Daily's userName can include extra tokens (e.g. "Sarah (bot)"), so we
-        match any known agent name as a whole word (case-insensitive).
-        """
-        if not display_name:
-            return False
-        for n in agents:
-            if n and n != name and _name_in_text(n, display_name):
-                return True
-        return False
+    def _is_other_agent(pname: str) -> bool:
+        return pname in agents and pname != name
 
     async def _subscribe(pid: str):
-        if not pid or pid in subscribed:
-            return
         try:
             await transport.capture_participant_transcription(pid)
-            subscribed.add(pid)
             logger.info(f"[{name}] subscribed to transcription: {pid}")
         except Exception as e:
             logger.warning(f"[{name}] capture_transcription error: {e}")
@@ -354,7 +399,7 @@ async def run_agent(
 
     @transport.event_handler("on_joined")
     async def on_joined(t, data):
-        nonlocal kickoff_fallback_task
+        nonlocal started
         my_id = _resolve_id(t, data)
         if my_id:
             self_id.clear()
@@ -362,79 +407,53 @@ async def run_agent(
             await _subscribe(my_id)
         logger.info(f"[{name}] joined (self_id={my_id or '(pending)'})")
 
-        if goes_first and not started and kickoff_fallback_task is None:
-            kickoff_fallback_task = asyncio.create_task(_kickoff_fallback())
-
         for pid, info in t.participants().items():
             if pid in (my_id, "local"):
                 continue
             pname = info.get("info", {}).get("userName", pid)
+            if not _is_other_agent(pname):
+                continue
+            logger.info(f"[{name}] found agent: {pname}")
             await _subscribe(pid)
-            if goes_first and not started and _matches_known_agent_name(pname):
-                logger.info(f"[{name}] found agent: {pname}")
-                _start_conversation("known-agent-detected:on_joined")
+            if goes_first and not started:
+                started = True
+                _kick(msgs, task, name)
 
     @transport.event_handler("on_first_participant_joined")
     async def on_first(t, p):
+        nonlocal started
         my_id = _resolve_id(t)
         if my_id and not self_id:
             self_id.append(my_id)
 
         pname = p.get("info", {}).get("userName", "?")
+        if not _is_other_agent(pname):
+            return
         logger.info(f"[{name}] first_participant_joined: {pname}")
         await _subscribe(p["id"])
-        if goes_first and not started and _matches_known_agent_name(pname):
-            _start_conversation("known-agent-detected:on_first_participant_joined")
-
-    def _cancel_shutdown():
-        nonlocal shutdown_task
-        if shutdown_task and not shutdown_task.done():
-            shutdown_task.cancel()
-        shutdown_task = None
+        if goes_first and not started:
+            started = True
+            _kick(msgs, task, name)
 
     @transport.event_handler("on_participant_joined")
     async def on_join(t, p):
+        nonlocal started
         pname = p.get("info", {}).get("userName", "?")
+        if not _is_other_agent(pname):
+            return
         logger.info(f"[{name}] participant_joined: {pname}")
         await _subscribe(p["id"])
-        if _matches_known_agent_name(pname):
-            if shutdown_task and not shutdown_task.done():
-                _cancel_shutdown()
-                logger.info(f"[{name}] cancelled pending shutdown — {pname} rejoined")
-            if goes_first and not started:
-                _start_conversation("known-agent-detected:on_participant_joined")
-        else:
-            latency_obs.broadcast_history()
+        if goes_first and not started:
+            started = True
+            _kick(msgs, task, name)
 
     @transport.event_handler("on_participant_left")
     async def on_leave(t, p, reason):
-        nonlocal shutdown_task
         pname = p.get("info", {}).get("userName", "?")
         logger.info(f"[{name}] participant left: {pname} (reason={reason})")
-        if not _matches_known_agent_name(pname):
-            return
-        if shutdown_task and not shutdown_task.done():
-            return
-
-        async def _delayed_shutdown(grace_secs: float = 8.0):
-            """Wait before shutting down — the other agent may reconnect."""
-            logger.info(
-                f"[{name}] other agent ({pname}) left — "
-                f"waiting {grace_secs}s for reconnect"
-            )
-            await asyncio.sleep(grace_secs)
-            for pid, info in t.participants().items():
-                if pid == "local" or (self_id and pid == self_id[0]):
-                    continue
-                peer = info.get("info", {}).get("userName", "")
-                if _matches_known_agent_name(peer):
-                    logger.info(f"[{name}] {peer} reconnected — staying alive")
-                    return
-            _cancel_kickoff_fallback()
-            logger.info(f"[{name}] other agent did not rejoin — shutting down")
+        if _is_other_agent(pname):
+            logger.info(f"[{name}] other agent left — shutting down")
             await task.cancel()
-
-        shutdown_task = asyncio.create_task(_delayed_shutdown())
 
     # -- Run --
     runner = PipelineRunner()
