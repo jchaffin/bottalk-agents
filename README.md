@@ -71,8 +71,7 @@ The frontend creates the room itself, so PCC does **not** use `createDailyRoom`.
 | **agent.py** | Core pipeline: `run_agent()` builds Pipeline with Daily transport, Silero VAD, TranscriptionFilter, LLM, TTS, LatencyMetricsObserver. Handles `end_conversation` tool, ConversationLimiter, kickoff. |
 | **config.py** | Default prompts (System/User Quick Start), voice IDs, VAD/SmartTurn configs. `AGENT_CONFIGS`, `VOICE_CONFIGS`, `VOICE_CONFIG_BY_GOES_FIRST`. |
 | **latency.py** | `LatencyMetricsObserver` — collects per-turn TTFB, LLM, TTS, e2e latency; broadcasts via Daily app-messages; appends to in-memory store for `/metrics`. Optional: POST to `METRICS_INGEST_URL`. |
-| **dev.py** | Local dev server (FastAPI). Proxies `/api/start` to create a Daily room and spawn two subprocess agents via `run_agent.py`. No PCC required. |
-| **run_agent.py** | CLI for running a single agent process. Used by `dev.py` and for manual testing. |
+| **dev.py** | Local dev server (FastAPI). Proxies `/api/start` to create a Daily room and spawn two subprocess agents via `bot.py`. No PCC required. |
 | **deploy.py** | Deploy/update agent definition on PCC via REST API. Reads `pcc-deploy.toml`, supports `--image` override for CI. |
 | **pcc-deploy.toml** | PCC config: image, secret set, scaling, region, agent profile. |
 
@@ -106,7 +105,7 @@ METRICS_INGEST_URL=      # Optional: POST per-turn metrics to your API
 python dev.py
 ```
 
-Starts FastAPI on port 8000. The bottalk frontend uses `NEXT_PUBLIC_API_URL=http://localhost:8000` to call `/api/start` instead of PCC. `dev.py` creates the Daily room, spawns two `run_agent.py` subprocesses, and returns room URL/token to the frontend.
+Starts FastAPI on port 8000. The bottalk frontend uses `NEXT_PUBLIC_API_URL=http://localhost:8000` to call `/api/start` instead of PCC. `dev.py` creates the Daily room, spawns two `bot.py` subprocesses, and returns room URL/token to the frontend.
 
 ---
 
