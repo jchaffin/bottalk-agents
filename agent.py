@@ -229,6 +229,7 @@ async def run_agent(
     user_params = LLMUserAggregatorParams(
         user_turn_strategies=user_turn_strategies or UserTurnStrategies(),
         user_turn_stop_timeout=user_turn_stop_timeout,
+        filter_incomplete_user_turns=True,
     )
     user_agg, asst_agg = LLMContextAggregatorPair(ctx, user_params=user_params)
 
