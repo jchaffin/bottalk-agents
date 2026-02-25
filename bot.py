@@ -1,4 +1,4 @@
-# Copyright 2026 Jacob Chaffin / Outrival. All rights reserved.
+# Copyright 2026 Jacob Chaffin / bottalk. All rights reserved.
 
 """
 Pipecat Cloud entry point.
@@ -17,25 +17,18 @@ round-trip::
     GET /v1/public/{agent}/sessions/{sessionId}/metrics
 """
 
+import argparse
+import asyncio
 import json
+import sys
 from typing import Any
 
+from dotenv import load_dotenv
 from loguru import logger
 from pipecat.runner.types import RunnerArguments
 
 from agent import run_agent
-from sarah import CONFIG as SARAH_CONFIG, get_voice_config as sarah_voice_config
-from mike import CONFIG as MIKE_CONFIG, get_voice_config as mike_voice_config
-
-AGENT_CONFIGS = {
-    "Sarah": SARAH_CONFIG,
-    "Mike": MIKE_CONFIG,
-}
-
-VOICE_CONFIGS = {
-    "Sarah": sarah_voice_config,
-    "Mike": mike_voice_config,
-}
+from config import AGENT_CONFIGS, VOICE_CONFIGS, VOICE_CONFIG_BY_GOES_FIRST
 
 # ---------------------------------------------------------------------------
 # Per-session metrics store
@@ -150,7 +143,7 @@ async def bot(args: RunnerArguments):
 
     room_url = body["room_url"]
     token = body["token"]
-    name = body.get("name", "Sarah")
+    name = body.get("name", "System")
     defaults = AGENT_CONFIGS.get(name, {})
 
     system_prompt = body.get("system_prompt") or defaults.get("system_prompt", "")
@@ -168,8 +161,8 @@ async def bot(args: RunnerArguments):
         "goes_first": goes_first,
     })
 
-    # Agent-specific VAD / SmartTurn config
-    voice_cfg_fn = VOICE_CONFIGS.get(name)
+    # Agent-specific VAD / SmartTurn config (by name or goes_first for custom names)
+    voice_cfg_fn = VOICE_CONFIGS.get(name) or VOICE_CONFIG_BY_GOES_FIRST.get(goes_first)
     voice_kwargs = voice_cfg_fn() if voice_cfg_fn else {}
 
     logger.info(
@@ -189,5 +182,54 @@ async def bot(args: RunnerArguments):
         session_id=session_id,
         metrics_store=_session_metrics,
         kpi_store=_session_kpis,
+        name_filter=False,  # Never filter by name — would drop most turns in 2-bot calls
         **voice_kwargs,
     )
+
+
+# ---------------------------------------------------------------------------
+# Local CLI entry point
+# ---------------------------------------------------------------------------
+
+class LocalRunnerArguments:
+    """Mock RunnerArguments for local development."""
+    def __init__(self, body: dict, session_id: str = "local"):
+        self.body = body
+        self.session_id = session_id
+
+
+if __name__ == "__main__":
+    load_dotenv(".env.local", override=True)
+    
+    logger.remove(0)
+    logger.add(sys.stderr, level="DEBUG", filter=lambda r: "vad" not in r["name"])
+
+    parser = argparse.ArgumentParser(description="Run bottalk agent locally")
+    parser.add_argument("--room-url", required=True, help="Daily room URL")
+    parser.add_argument("--token", required=True, help="Daily room token")
+    parser.add_argument("--name", default="System", help="Agent name")
+    parser.add_argument("--system-prompt", default="", help="System prompt override")
+    parser.add_argument("--voice-id", help="ElevenLabs voice ID")
+    parser.add_argument("--goes-first", action="store_true", help="Agent starts conversation")
+    parser.add_argument("--known-agents", help="Comma-separated known agent names")
+    parser.add_argument("--max-turns", type=int, default=20, help="Max turns before stopping")
+    parser.add_argument("--session-id", default="local", help="Session identifier")
+    args = parser.parse_args()
+
+    body = {
+        "room_url": args.room_url,
+        "token": args.token,
+        "name": args.name,
+        "system_prompt": args.system_prompt,
+        "voice_id": args.voice_id,
+        "goes_first": args.goes_first,
+        "known_agents": args.known_agents.split(",") if args.known_agents else [],
+        "max_turns": args.max_turns,
+    }
+
+    mock_args = LocalRunnerArguments(body, args.session_id)
+    
+    try:
+        asyncio.run(bot(mock_args))
+    except KeyboardInterrupt:
+        logger.info(f"[{args.name}] stopped by user")

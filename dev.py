@@ -1,4 +1,4 @@
-# Copyright 2026 Jacob Chaffin / Outrival. All rights reserved.
+# Copyright 2026 Jacob Chaffin / bottalk. All rights reserved.
 
 """
 Local dev server — runs agents as separate processes, no Pipecat Cloud needed.
@@ -10,6 +10,7 @@ Frontend connects via NEXT_PUBLIC_API_URL=http://localhost:8000
 """
 
 import asyncio
+import importlib
 import os
 import subprocess
 import sys
@@ -25,11 +26,10 @@ from loguru import logger
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env.local"), override=True)
 load_dotenv(".env.local", override=True)
 
-from pipecat.transports.daily.utils import (
-    DailyRESTHelper,
-    DailyRoomParams,
-    DailyRoomProperties,
-)
+daily_utils = importlib.import_module("pipecat.transports.daily.utils")
+DailyRESTHelper = daily_utils.DailyRESTHelper
+DailyRoomParams = daily_utils.DailyRoomParams
+DailyRoomProperties = daily_utils.DailyRoomProperties
 
 logger.remove(0)
 logger.add(sys.stderr, level="DEBUG", filter=lambda r: "vad" not in r["name"])
@@ -37,7 +37,7 @@ logger.add(sys.stderr, level="DEBUG", filter=lambda r: "vad" not in r["name"])
 DEFAULT_VOICE_1 = os.getenv("DEFAULT_VOICE_1", "21m00Tcm4TlvDq8ikWAM")
 DEFAULT_VOICE_2 = os.getenv("DEFAULT_VOICE_2", "TxGEqnHWrfWFTfGW9XjX")
 
-app = FastAPI(title="Outrival Local Dev")
+app = FastAPI(title="bottalk Local Dev")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -78,7 +78,7 @@ def _terminate():
 
 
 @app.post("/api/start")
-async def start(request: dict | None = None):
+async def start(request: Request):
     for key in ("DAILY_API_KEY", "OPENAI_API_KEY", "ELEVENLABS_API_KEY"):
         if not os.getenv(key):
             raise HTTPException(500, f"Missing {key}")
@@ -86,26 +86,28 @@ async def start(request: dict | None = None):
     _terminate()
     _transcript_events.clear()
 
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
     # Agents can be provided by the frontend as an array of two objects.
-    # When omitted or incomplete, fall back to Sarah & Mike defaults
-    # (the agent process uses baked-in configs from sarah.py / mike.py).
-    body = request or {}
+    # Each agent has name, prompt, voice_id, role. Prompts are sent through to the agent backend.
     agents = body.get("agents")
 
     if not agents or len(agents) < 2:
         agents = [
-            {"name": "Sarah", "voice_id": DEFAULT_VOICE_1},
-            {"name": "Mike", "voice_id": DEFAULT_VOICE_2},
+            {"name": "System", "prompt": "", "voice_id": DEFAULT_VOICE_1},
+            {"name": "User", "prompt": "", "voice_id": DEFAULT_VOICE_2},
         ]
 
-    agent1 = agents[0]
-    agent2 = agents[1]
+    agent1 = dict(agents[0]) if isinstance(agents[0], dict) else {}
+    agent2 = dict(agents[1]) if isinstance(agents[1], dict) else {}
 
-    if not agent1.get("name"):
-        agent1["name"] = "Sarah"
-    if not agent2.get("name"):
-        agent2["name"] = "Mike"
-
+    agent1.setdefault("name", "System")
+    agent2.setdefault("name", "User")
+    agent1.setdefault("prompt", "")
+    agent2.setdefault("prompt", "")
     voice1 = agent1.get("voice_id") or DEFAULT_VOICE_1
     voice2 = agent2.get("voice_id") or DEFAULT_VOICE_2
     all_names = f"{agent1['name']},{agent2['name']}"
@@ -118,27 +120,41 @@ async def start(request: dict | None = None):
         room = await helper.create_room(
             DailyRoomParams(properties=DailyRoomProperties(exp=time.time() + 600))
         )
-        t1 = await helper.get_token(room.url)
-        t2 = await helper.get_token(room.url)
-        t_browser = await helper.get_token(room.url)
+        t1, t2, t_browser = await asyncio.gather(
+            helper.get_token(room.url),
+            helper.get_token(room.url),
+            helper.get_token(room.url),
+        )
 
     room_url = room.url
     py = sys.executable
     here = os.path.dirname(__file__)
     logger.info(f"Room: {room_url}")
 
-    # Spawn sarah.py and mike.py as separate processes (matches two-bots/main.py).
+    # Spawn bot.py twice with full agent config — prompts come from frontend, not hardcoded.
+    # bot.py falls back to config.AGENT_CONFIGS when prompt is empty (Quick Start).
     proc1 = subprocess.Popen([
-        py, os.path.join(here, "sarah.py"),
+        py, os.path.join(here, "bot.py"),
         "--room-url", room_url,
         "--token", t1,
+        "--name", agent1["name"],
+        "--system-prompt", agent1["prompt"],
+        "--voice-id", voice1,
+        "--goes-first",
+        "--known-agents", all_names,
+        "--session-id", "local-1",
     ])
     _procs.append(proc1)
 
     proc2 = subprocess.Popen([
-        py, os.path.join(here, "mike.py"),
+        py, os.path.join(here, "bot.py"),
         "--room-url", room_url,
         "--token", t2,
+        "--name", agent2["name"],
+        "--system-prompt", agent2["prompt"],
+        "--voice-id", voice2,
+        "--known-agents", all_names,
+        "--session-id", "local-2",
     ])
     _procs.append(proc2)
 

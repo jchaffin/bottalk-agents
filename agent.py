@@ -16,8 +16,11 @@ transcription text.
 """
 
 import asyncio
+import argparse
 import os
 import re
+import subprocess
+import sys
 
 from loguru import logger
 
@@ -51,8 +54,7 @@ from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.transports.daily.transport import DailyParams, DailyTransport
 
-
-KNOWN_AGENTS = {"Sarah", "Mike"}
+KNOWN_AGENTS = {"System", "User"}
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +186,7 @@ async def run_agent(
     """Join *room_url* as *name* and run an LLM voice pipeline."""
 
     if vad_params is None:
-        vad_params = VADParams(threshold=0.6, min_volume=0.4, stop_secs=0.2)
+        vad_params = VADParams(confidence=0.6, min_volume=0.4, stop_secs=0.2)
 
     # -- Transport --
     transport = DailyTransport(
@@ -208,14 +210,25 @@ async def run_agent(
             temperature=0.7,
         ),
     )
-    tts = ElevenLabsTTSService(api_key=os.getenv("ELEVENLABS_API_KEY"), voice_id=voice_id)
+    tts_model = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+    tts = ElevenLabsTTSService(
+        api_key=os.getenv("ELEVENLABS_API_KEY"),
+        voice_id=voice_id,
+        model=tts_model,
+    )
 
     # -- Context & aggregators --
     msgs = [{"role": "system", "content": system_prompt}]
+    if goes_first:
+        msgs[0]["content"] = (
+            str(msgs[0]["content"]).rstrip()
+            + "\n\nIMPORTANT: When the conversation has naturally concluded (both parties have said goodbye, agreed on next steps, or the customer has declined), you MUST call the end_conversation tool. Do not only say goodbye in text — you must invoke the tool to formally end the call."
+        )
     ctx = LLMContext(msgs)
     user_params = LLMUserAggregatorParams(
         user_turn_strategies=user_turn_strategies or UserTurnStrategies(),
         user_turn_stop_timeout=user_turn_stop_timeout,
+        filter_incomplete_user_turns=False,  # Bot↔bot = complete turns; avoid 5–10s ○/◐ waits
     )
     user_agg, asst_agg = LLMContextAggregatorPair(ctx, user_params=user_params)
 
@@ -255,6 +268,7 @@ async def run_agent(
             enable_usage_metrics=True,
             allow_interruptions=allow_interruptions,
         ),
+        enable_rtvi=False,  # We use "metrics" app-messages via LatencyMetricsObserver; RTVI not needed
         observers=[
             MetricsLogObserver(),
             latency_obs,
@@ -267,10 +281,11 @@ async def run_agent(
         end_fn = FunctionSchema(
             name="end_conversation",
             description=(
-                "Call ONLY after BOTH parties have explicitly said goodbye "
-                "and the conversation is completely finished. Never call "
-                "this during an active discussion. The conversation must "
-                "have had at least 10 exchanges before this can be called."
+                "Call this when BOTH parties have said goodbye and the "
+                "conversation is finished (e.g. agreed next steps, customer "
+                "declined, or natural wrap-up). Call it as soon as that "
+                "happens — do not add more dialogue. Never call during "
+                "active discussion."
             ),
             properties={},
             required=[],
@@ -323,7 +338,7 @@ async def run_agent(
     def _matches_known_agent_name(display_name: str) -> bool:
         """Best-effort match for Daily participant display names.
 
-        Daily's userName can include extra tokens (e.g. "Sarah (bot)"), so we
+        Daily's userName can include extra tokens (e.g. "System (bot)"), so we
         match any known agent name as a whole word (case-insensitive).
         """
         if not display_name:
@@ -449,3 +464,42 @@ def _kick(msgs: list, task: PipelineTask, name: str):
         "content": "The other person is on the line. Introduce yourself and begin.",
     })
     asyncio.ensure_future(task.queue_frames([LLMRunFrame()]))
+
+
+def _deploy_local_agent() -> int:
+    """Deploy/update a local-named PCC agent via deploy.py."""
+    here = os.path.dirname(__file__)
+    deploy_script = os.path.join(here, "deploy.py")
+    if not os.path.exists(deploy_script):
+        print("deploy.py not found in agents/", file=sys.stderr)
+        return 1
+    env = os.environ.copy()
+    env["PCC_AGENT_NAME"] = "bottalk-agent-local"
+    proc = subprocess.run([sys.executable, deploy_script], check=False, env=env)
+    return int(proc.returncode)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Agent utilities")
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="Deploy/update Pipecat Cloud agent using PCC_AGENT_NAME=bottalk-agent-local",
+    )
+    parser.add_argument(
+        "--run-local",
+        action="store_true",
+        help="Start local dev server (same as: python dev.py)",
+    )
+    args = parser.parse_args()
+
+    if args.local:
+        raise SystemExit(_deploy_local_agent())
+    
+    if args.run_local:
+        here = os.path.dirname(__file__)
+        dev_script = os.path.join(here, "dev.py")
+        proc = subprocess.run([sys.executable, dev_script], check=False)
+        raise SystemExit(int(proc.returncode))
+
+    parser.print_help()

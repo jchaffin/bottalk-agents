@@ -1,11 +1,11 @@
-# Copyright 2026 Jacob Chaffin / Outrival. All rights reserved.
+# Copyright 2026 Jacob Chaffin / bottalk. All rights reserved.
 
 """
 CLI entry point for running a single agent locally.
 
-    python run_agent.py --room-url URL --token TOKEN --name Sarah \
+    python run_agent.py --room-url URL --token TOKEN --name System \
         --system-prompt "..." --voice-id "..." --goes-first \
-        --known-agents "Sarah,Mike"
+        --known-agents "System,User"
 """
 
 import argparse
