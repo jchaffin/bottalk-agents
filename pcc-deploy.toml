@@ -3,8 +3,7 @@
 
 agent_name = "bottalk-agent"
 image = "ghcr.io/jchaffin/bottalk-agents:latest"
-region = "us-west"
-node_type = "arm"
+# region inherited from existing deployment
 
 # Secrets (must exist in Pipecat Cloud Dashboard, same region as agent)
 secret_set = "bottalk-secrets"
@@ -18,8 +17,8 @@ agent_profile = "agent-1x"
 
 [scaling]
 # 0 = scale to zero when idle (cold starts); 1+ = always warm
-min_agents = 0
-max_agents = 10
+min_agents = 2
+max_agents = 50
 
 # Optional: Krisp VIVA noise cancellation for telephony
 # [krisp_viva]

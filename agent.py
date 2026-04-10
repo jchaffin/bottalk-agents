@@ -210,11 +210,16 @@ async def run_agent(
             temperature=0.7,
         ),
     )
-    tts_model = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+    tts_model = os.getenv("ELEVENLABS_MODEL", "eleven_turbo_v2_5")
     tts = ElevenLabsTTSService(
         api_key=os.getenv("ELEVENLABS_API_KEY"),
         voice_id=voice_id,
         model=tts_model,
+        params=ElevenLabsTTSService.InputParams(
+            stability=0.5,
+            similarity_boost=0.75,
+            style=0.0,
+        ),
     )
 
     # -- Context & aggregators --
